@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name    = "yaml_config_provider"
+version = "0.1.0"
+
+[dependencies]
+component_store = { path = "../component_store" }
+thiserror       = "1.0"
+yaml-rust       = "0.4"

@@ -1,0 +1,10 @@
+[package]
+edition = "2021"
+name    = "component_store"
+version = "0.1.0"
+
+
+[dependencies]
+anyhow    = "1.0"
+thiserror = "1.0"
+tokio     = "1.17.0"
