@@ -12,7 +12,7 @@ periodic_component   = { path = "../../libraries/periodic_component" }
 prost                = "0.9"
 prost-types          = "0.9"
 tokio                = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-tonic                = "0.6"
+tonic                = { version = "0.6", features = ["tls", "tls-roots"] }
 yaml_config_provider = { path = "../../libraries/yaml_config_provider" }
 
 [build-dependencies]

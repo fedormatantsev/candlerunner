@@ -34,7 +34,9 @@ pub enum ComponentError {
 }
 
 pub fn init_err<E: std::error::Error + Send + Sync + 'static>(err: E) -> ComponentError {
-    ComponentError::InitializationFailed { source: Box::new(err) }
+    ComponentError::InitializationFailed {
+        source: Box::new(err),
+    }
 }
 
 pub trait CreateComponent {
