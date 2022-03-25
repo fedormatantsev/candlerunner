@@ -1,3 +1,5 @@
 tinkoff-client:
   url: https://invest-public-api.tinkoff.ru:443
   auth_token: lalalalala
+
+strategy-registry: {}
