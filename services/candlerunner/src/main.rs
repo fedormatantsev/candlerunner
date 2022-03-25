@@ -1,5 +1,6 @@
 mod components;
 mod generated;
+mod models;
 
 use anyhow;
 use clap::Parser;
@@ -22,6 +23,7 @@ async fn main() -> anyhow::Result<()> {
 
     let component_store = ComponentStore::builder()
         .register::<components::TinkoffClient>()
+        .register::<components::StrategyRegistry>()
         .build(config)
         .await?;
 
