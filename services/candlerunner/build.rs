@@ -1,5 +1,3 @@
-use tonic_build;
-
 #[allow(dead_code)]
 enum Target {
     Server,

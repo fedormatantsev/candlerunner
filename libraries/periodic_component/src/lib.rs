@@ -4,10 +4,7 @@ use std::{future::Future, marker::PhantomData};
 
 use tokio::{sync::watch, task::JoinHandle, time};
 
-use component_store::{
-    Component, ComponentError, ComponentFuture, ComponentName, ComponentResolver, ConfigProvider,
-    CreateComponent, DestroyComponent,
-};
+use component_store::prelude::*;
 
 pub type PeriodicFuture = Pin<Box<dyn Future<Output = ()>>>;
 pub type PeriodicCreateFuture<P> =
@@ -46,7 +43,7 @@ impl<P: Periodic> CreateComponent for PeriodicComponent<P> {
                         _ = will_stop.changed() => ()
                     };
 
-                    if *will_stop.borrow() == true {
+                    if *will_stop.borrow() {
                         break;
                     }
 
