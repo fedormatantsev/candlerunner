@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use mongodb::{bson::Document, options::ClientOptions, Client, Database};
+use mongodb::bson::{doc, Document};
+use mongodb::options::UpdateOptions;
+use mongodb::{options::ClientOptions, Client, Database};
 
 use component_store::{
     init_err, Component, ComponentError, ComponentName, CreateComponent, DestroyComponent,
@@ -9,7 +11,6 @@ use component_store::{
 use crate::models::instruments::Instrument;
 
 pub struct Mongo {
-    client: Client,
     db: Database,
 }
 
@@ -46,13 +47,44 @@ impl Mongo {
         let client = Client::with_options(client_options).map_err(init_err)?;
         let db = client.database("candlerunner");
 
-        Ok(Self { client, db })
+        Ok(Self { db })
     }
 
     pub async fn write_instruments(&self, instruments: Vec<Instrument>) -> anyhow::Result<()> {
-        println!("writing {} instruments to mongo", instruments.len());
+        println!("Updating {} instruments", instruments.len());
 
         let collection = self.db.collection::<Document>("instruments");
+
+        let mut modified = 0;
+        let mut errors = 0;
+
+        for instrument in instruments {
+            match collection
+                .update_one(
+                    doc! { "figi": &instrument.figi.0 },
+                    doc! {
+                        "$set": {
+                            "figi": &instrument.figi.0,
+                            "ticker": &instrument.ticker.0,
+                            "display_name": instrument.display_name
+                        }
+                    },
+                    Some(UpdateOptions::builder().upsert(true).build()),
+                )
+                .await
+            {
+                Ok(_) => modified += 1,
+                Err(err) => {
+                    println!(
+                        "Failed to update instrument (ticker: {}, figi: {}): {}",
+                        instrument.ticker.0, instrument.figi.0, err
+                    );
+                    errors += 1;
+                }
+            }
+        }
+
+        println!("{} modified, {} errors", modified, errors);
 
         Ok(())
     }

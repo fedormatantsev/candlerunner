@@ -6,7 +6,7 @@ use tokio::{sync::watch, task::JoinHandle, time};
 
 use component_store::prelude::*;
 
-pub type PeriodicFuture = Pin<Box<dyn Future<Output = ()>>>;
+pub type PeriodicFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>;
 pub type PeriodicCreateFuture<P> =
     Pin<Box<dyn Future<Output = Result<P, ComponentError>> + Send + Sync>>;
 
@@ -30,7 +30,7 @@ impl<P: Periodic> CreateComponent for PeriodicComponent<P> {
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
         Box::pin(async move {
-            let period = time::Duration::from_secs(config.get_u64("period")?);
+            let period = time::Duration::from_secs(config.get_u64("update_period")?);
             let mut periodic = P::create(resolver, config).await?;
             let (stop, mut will_stop) = watch::channel(false);
 
@@ -47,7 +47,9 @@ impl<P: Periodic> CreateComponent for PeriodicComponent<P> {
                         break;
                     }
 
-                    periodic.step();
+                    if let Err(err) = periodic.step().await {
+                        println!("Periodic {} update failed: {}", P::component_name(), err);
+                    }
                 }
 
                 println!("Stopping periodic: {}", P::component_name());

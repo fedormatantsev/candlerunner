@@ -6,4 +6,6 @@ instrument-sync:
   update_period: 3
 
 mongo:
-  url: mongodb://localhost:27017
+  url: mongodb://127.0.0.1:27017
+
+strategy-registry: {}
