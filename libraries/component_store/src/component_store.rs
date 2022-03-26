@@ -17,7 +17,7 @@ use crate::resolution::{ComponentDAG, ComponentResolver, ResolutionContext};
 trait ComponentFactory: Send + Sync + 'static {
     fn create(
         &self,
-        component_resolver: ComponentResolver,
+        resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<(AnyComponent, ComponentDtor, ComponentInfo), ComponentError>>;
 
@@ -39,12 +39,12 @@ impl<C: Component> Default for DefaultComponentFactory<C> {
 impl<C: Component> ComponentFactory for DefaultComponentFactory<C> {
     fn create(
         &self,
-        component_resolver: ComponentResolver,
+        resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<(AnyComponent, ComponentDtor, ComponentInfo), ComponentError>> {
         let info = self.component_info();
         Box::pin(async move {
-            let component = C::create(component_resolver, config).await?;
+            let component = C::create(resolver, config).await?;
             let dtor: ComponentDtor = component.clone();
             let component: AnyComponent = component;
             Ok((component, dtor, info))
@@ -260,11 +260,11 @@ mod tests {
 
     impl CreateComponent for TestComponentB {
         fn create(
-            component_resolver: ComponentResolver,
+            resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
             Box::pin(async move {
-                let a = component_resolver.resolve::<TestComponentA>().await?;
+                let a = resolver.resolve::<TestComponentA>().await?;
                 Ok(Arc::new(Self { _a: a }))
             })
         }
@@ -282,12 +282,12 @@ mod tests {
 
     impl CreateComponent for TestComponentC {
         fn create(
-            component_resolver: ComponentResolver,
+            resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
             Box::pin(async move {
-                let a = component_resolver.resolve::<TestComponentA>().await?;
-                let b = component_resolver.resolve::<TestComponentB>().await?;
+                let a = resolver.resolve::<TestComponentA>().await?;
+                let b = resolver.resolve::<TestComponentB>().await?;
                 Ok(Arc::new(Self { _a: a, _b: b }))
             })
         }
@@ -305,13 +305,13 @@ mod tests {
 
     impl CreateComponent for TestComponentD {
         fn create(
-            component_resolver: ComponentResolver,
+            resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
             Box::pin(async move {
-                let a = component_resolver.resolve::<TestComponentA>().await?;
-                let b = component_resolver.resolve::<TestComponentB>().await?;
-                let c = component_resolver.resolve::<TestComponentC>().await?;
+                let a = resolver.resolve::<TestComponentA>().await?;
+                let b = resolver.resolve::<TestComponentB>().await?;
+                let c = resolver.resolve::<TestComponentC>().await?;
                 Ok(Arc::new(Self {
                     _a: a,
                     _b: b,

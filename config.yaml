@@ -4,3 +4,6 @@ tinkoff-client:
 
 instrument-sync:
   update_period: 3
+
+mongo:
+  url: mongodb://localhost:27017

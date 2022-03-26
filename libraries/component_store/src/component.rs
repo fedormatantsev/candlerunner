@@ -41,7 +41,7 @@ pub fn init_err<E: std::error::Error + Send + Sync + 'static>(err: E) -> Compone
 
 pub trait CreateComponent {
     fn create(
-        component_resolver: ComponentResolver,
+        resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<Arc<Self>, ComponentError>>;
 }

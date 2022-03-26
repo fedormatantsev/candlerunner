@@ -25,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .register::<components::TinkoffClient>()
         .register::<components::StrategyRegistry>()
         .register::<components::InstrumentSync>()
+        .register::<components::Mongo>()
         .build(config)
         .await?;
 

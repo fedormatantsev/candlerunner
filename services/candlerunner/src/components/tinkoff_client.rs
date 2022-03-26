@@ -57,14 +57,10 @@ pub struct TinkoffClient {
 
 impl CreateComponent for TinkoffClient {
     fn create(
-        component_resolver: ComponentResolver,
+        resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
-        Box::pin(async move {
-            Ok(Arc::new(
-                TinkoffClient::new(component_resolver, config).await?,
-            ))
-        })
+        Box::pin(async move { Ok(Arc::new(TinkoffClient::new(resolver, config).await?)) })
     }
 }
 

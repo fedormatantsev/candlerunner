@@ -9,6 +9,7 @@ anyhow               = "1.0"
 clap                 = { version = "3.1", features = ["derive"] }
 component_store      = { path = "../../libraries/component_store" }
 periodic_component   = { path = "../../libraries/periodic_component" }
+mongodb              = "2.1.0"
 prost                = "0.9"
 prost-types          = "0.9"
 tokio                = { version = "1.0", features = ["macros", "rt-multi-thread"] }
