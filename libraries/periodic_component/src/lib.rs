@@ -6,7 +6,7 @@ use tokio::{sync::watch, task::JoinHandle, time};
 
 use component_store::prelude::*;
 
-pub type PeriodicFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'static>>;
+pub type PeriodicFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
 pub type PeriodicCreateFuture<P> =
     Pin<Box<dyn Future<Output = Result<P, ComponentError>> + Send + Sync>>;
 

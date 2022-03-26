@@ -4,9 +4,7 @@ use mongodb::bson::{doc, Document};
 use mongodb::options::UpdateOptions;
 use mongodb::{options::ClientOptions, Client, Database};
 
-use component_store::{
-    init_err, Component, ComponentError, ComponentName, CreateComponent, DestroyComponent,
-};
+use component_store::{init_err, prelude::*};
 
 use crate::models::instruments::Instrument;
 

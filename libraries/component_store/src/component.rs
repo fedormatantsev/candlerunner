@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::config::{ConfigError, ConfigProvider};
 use crate::resolution::ComponentResolver;
 
-pub type ComponentFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+pub type ComponentFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Error, Debug)]
 pub enum ComponentError {

@@ -4,10 +4,7 @@ use tonic::service::interceptor::{InterceptedService, Interceptor};
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Request, Status};
 
-use component_store::{
-    init_err, Component, ComponentError, ComponentFuture, ComponentName, ComponentResolver,
-    ConfigProvider, CreateComponent, DestroyComponent,
-};
+use component_store::{init_err, prelude::*};
 
 use crate::generated::tinkoff_invest_api::{
     self, instruments_service_client::InstrumentsServiceClient,
