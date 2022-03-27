@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -13,7 +14,7 @@ pub enum ParamType {
     Boolean,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ParamValue {
     Instrument(Figi),
     Integer(i64),
@@ -28,6 +29,7 @@ pub struct ParamDefinition {
     default: Option<ParamValue>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct StrategyInstanceDefinition {
     pub strategy_name: String,
     pub params: HashMap<String, ParamValue>,

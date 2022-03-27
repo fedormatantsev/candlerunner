@@ -141,6 +141,7 @@ dependencies = [
  "periodic_component",
  "prost",
  "prost-types",
+ "serde",
  "thiserror",
  "tokio",
  "tonic",
