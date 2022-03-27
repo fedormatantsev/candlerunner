@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tonic::metadata::{AsciiMetadataKey, AsciiMetadataValue};
 use tonic::service::interceptor::{InterceptedService, Interceptor};
 use tonic::transport::{Channel, Endpoint};
@@ -52,16 +51,16 @@ pub struct TinkoffClient {
     client: InterceptedService<Channel, AuthorizationInterceptor>,
 }
 
-impl CreateComponent for TinkoffClient {
-    fn create(
+impl InitComponent for TinkoffClient {
+    fn init(
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
-    ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
-        Box::pin(async move { Ok(Arc::new(TinkoffClient::new(resolver, config).await?)) })
+    ) -> ComponentFuture<Result<Self, ComponentError>> {
+        Box::pin(TinkoffClient::new(resolver, config))
     }
 }
 
-impl DestroyComponent for TinkoffClient {}
+impl ShutdownComponent for TinkoffClient {}
 
 impl ComponentName for TinkoffClient {
     fn component_name() -> &'static str {

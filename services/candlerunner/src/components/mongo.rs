@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use futures::stream::StreamExt;
 
 use mongodb::bson::{doc, Document};
@@ -14,18 +12,16 @@ pub struct Mongo {
     db: Database,
 }
 
-impl CreateComponent for Mongo {
-    fn create(
+impl InitComponent for Mongo {
+    fn init(
         resolver: component_store::ComponentResolver,
         config: Box<dyn component_store::ConfigProvider>,
-    ) -> component_store::ComponentFuture<
-        Result<std::sync::Arc<Self>, component_store::ComponentError>,
-    > {
-        Box::pin(async move { Ok(Arc::new(Mongo::new(resolver, config).await?)) })
+    ) -> component_store::ComponentFuture<Result<Self, component_store::ComponentError>> {
+        Box::pin(Mongo::new(resolver, config))
     }
 }
 
-impl DestroyComponent for Mongo {}
+impl ShutdownComponent for Mongo {}
 
 impl ComponentName for Mongo {
     fn component_name() -> &'static str {
