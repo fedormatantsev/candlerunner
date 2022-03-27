@@ -1,4 +1,4 @@
 {
     "evenBetterToml.formatter.alignEntries": true,
-    "evenBetterToml.formatter.reorderKeys": true
+    "evenBetterToml.formatter.reorderKeys": true,
 }

@@ -24,8 +24,15 @@ async fn main() -> anyhow::Result<()> {
     let component_store = ComponentStore::builder()
         .register::<components::TinkoffClient>()
         .register::<components::StrategyRegistry>()
+        .register::<components::InstrumentSync>()
+        .register::<components::Mongo>()
+        .register::<components::InstrumentCache>()
         .build(config)
         .await?;
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+    component_store.destroy().await;
 
     Ok(())
 }

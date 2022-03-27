@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::models::instruments::Figi;
+
 pub enum ParamType {
     Instrument,
     Integer,
@@ -8,7 +10,7 @@ pub enum ParamType {
 }
 
 pub enum ParamValue {
-    Instrument(String /* TODO: use Figi type */),
+    Instrument(Figi),
     Integer(i64),
     Float(f64),
     Boolean(bool),

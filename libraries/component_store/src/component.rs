@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::config::{ConfigError, ConfigProvider};
 use crate::resolution::ComponentResolver;
 
-pub type ComponentFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
+pub type ComponentFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Error, Debug)]
 pub enum ComponentError {
@@ -34,12 +34,14 @@ pub enum ComponentError {
 }
 
 pub fn init_err<E: std::error::Error + Send + Sync + 'static>(err: E) -> ComponentError {
-    ComponentError::InitializationFailed { source: Box::new(err) }
+    ComponentError::InitializationFailed {
+        source: Box::new(err),
+    }
 }
 
 pub trait CreateComponent {
     fn create(
-        component_resolver: ComponentResolver,
+        resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<Arc<Self>, ComponentError>>;
 }
