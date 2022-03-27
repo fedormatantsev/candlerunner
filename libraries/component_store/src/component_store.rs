@@ -1,5 +1,5 @@
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -103,6 +103,7 @@ pub struct ComponentStore {
 
 #[derive(Default)]
 pub struct ComponentStoreBuilder {
+    known_types: HashSet<TypeId>,
     factories: Vec<Box<dyn ComponentFactory>>,
 }
 
@@ -110,10 +111,17 @@ impl ComponentStoreBuilder {
     ///
     /// Registers a new component type in component store
     ///
-    pub fn register<C: Component>(mut self) -> Self {
+    pub fn register<C: Component>(mut self) -> anyhow::Result<Self> {
+        if !self.known_types.insert(TypeId::of::<C>()) {
+            return Err(anyhow::anyhow!(
+                "Component {} is already registered",
+                C::component_name()
+            ));
+        }
+
         self.factories
             .push(Box::new(DefaultComponentFactory::<C>::default()));
-        self
+        Ok(self)
     }
 
     ///
@@ -133,26 +141,18 @@ impl ComponentStoreBuilder {
             });
         }
 
-        let context = Arc::new(ResolutionContext::default());
+        let context = Arc::new(ResolutionContext::new(self.known_types));
 
         let (sender, mut receiver) = mpsc::channel(self.factories.len());
-
-        let mut err: Option<ComponentError> = None;
 
         for factory in self.factories {
             let sender = sender.clone();
             let resolver = ComponentResolver::new(context.clone(), factory.component_info());
 
-            let config = config_provider.get_subconfig(factory.component_info().name);
-            let config = match config {
-                Err(e) => {
-                    err = Some(e.into());
-                    break;
-                }
-                Ok(c) => c,
-            };
+            let config = config_provider.get_subconfig(factory.component_info().name)?;
 
             tokio::spawn(async move {
+                println!("Creating {}", factory.component_info().name);
                 let res = factory.create(resolver, config).await;
                 if sender.send(res).await.is_err() {
                     panic!("Unable to send component to queue")
@@ -165,28 +165,17 @@ impl ComponentStoreBuilder {
         let mut destructors: Vec<(ComponentInfo, ComponentDtor)> = Default::default();
 
         while let Some(res) = receiver.recv().await {
-            match res {
-                Ok((component, dtor, component_info)) => {
-                    context.add_component(&component_info, component);
-                    destructors.push((component_info, dtor));
-                }
-                Err(e) => {
-                    err = Some(e);
-                }
-            }
+            let (component, dtor, component_info) = res?;
+            context.add_component(&component_info, component);
+            destructors.push((component_info, dtor));
         }
 
         let (components, dag) = context.finalize();
         let destructor = DAGDestructor::new(destructors, dag);
 
-        if let Some(err) = err {
-            destructor.destroy().await;
-            return Err(err);
-        }
-
         Ok(ComponentStore {
             components,
-            destructor: destructor,
+            destructor,
         })
     }
 }
@@ -243,8 +232,8 @@ mod tests {
         fn init(
             _: ComponentResolver,
             _: Box<dyn ConfigProvider>,
-        ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
-            Box::pin(std::future::ready(Ok(Arc::new(Self {}))))
+        ) -> ComponentFuture<Result<Self, ComponentError>> {
+            Box::pin(std::future::ready(Ok(Self {})))
         }
     }
 
@@ -262,10 +251,10 @@ mod tests {
         fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
-        ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
+        ) -> ComponentFuture<Result<Self, ComponentError>> {
             Box::pin(async move {
                 let a = resolver.resolve::<TestComponentA>().await?;
-                Ok(Arc::new(Self { _a: a }))
+                Ok(Self { _a: a })
             })
         }
     }
@@ -284,11 +273,11 @@ mod tests {
         fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
-        ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
+        ) -> ComponentFuture<Result<Self, ComponentError>> {
             Box::pin(async move {
                 let a = resolver.resolve::<TestComponentA>().await?;
                 let b = resolver.resolve::<TestComponentB>().await?;
-                Ok(Arc::new(Self { _a: a, _b: b }))
+                Ok(Self { _a: a, _b: b })
             })
         }
     }
@@ -307,16 +296,16 @@ mod tests {
         fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
-        ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
+        ) -> ComponentFuture<Result<Self, ComponentError>> {
             Box::pin(async move {
                 let a = resolver.resolve::<TestComponentA>().await?;
                 let b = resolver.resolve::<TestComponentB>().await?;
                 let c = resolver.resolve::<TestComponentC>().await?;
-                Ok(Arc::new(Self {
+                Ok(Self {
                     _a: a,
                     _b: b,
                     _c: c,
-                }))
+                })
             })
         }
     }

@@ -23,6 +23,11 @@ pub struct ParamDefinition {
     default: Option<ParamValue>,
 }
 
+pub struct StrategyInstanceDefinition {
+    pub strategy_name: String,
+    pub params: HashMap<String, ParamValue>,
+}
+
 pub trait StrategyDefinition {
     fn params(&self) -> &'_ Vec<ParamDefinition>;
     fn strategy_name(&self) -> &'_ str;
@@ -33,7 +38,7 @@ pub trait Strategy {}
 
 pub enum CreateStrategyError {
     StrategyNotFound(String),
-    ParamMissiing(String),
+    ParamMissing(String),
     ParamTypeMismatch(String),
     FailedToCreateStrategy { source: anyhow::Error },
 }

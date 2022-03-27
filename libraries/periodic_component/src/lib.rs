@@ -66,6 +66,7 @@ impl<P: Periodic> InitComponent for PeriodicComponent<P> {
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> ComponentFuture<Result<Self, ComponentError>> {
+        println!("init {}", P::component_name());
         Box::pin(async move {
             let period = time::Duration::from_secs(config.get_u64("update_period")?);
 
@@ -111,6 +112,7 @@ impl<P: Periodic> InitComponent for PeriodicComponent<P> {
                 println!("Stopping periodic: {}", P::component_name());
             });
 
+            println!("Created periodic {}", P::component_name());
             Ok(Self {
                 state: state_holder,
                 inner: Mutex::new(Some(inner)),

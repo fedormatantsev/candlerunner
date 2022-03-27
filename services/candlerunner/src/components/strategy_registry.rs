@@ -3,7 +3,8 @@ use std::collections::{hash_map, HashMap};
 use component_store::prelude::*;
 
 use crate::models::strategy::{
-    CreateStrategyError, ParamValue, Strategy, StrategyDefinition, StrategyFactory,
+    CreateStrategyError, Strategy, StrategyDefinition, StrategyFactory,
+    StrategyInstanceDefinition,
 };
 
 pub struct StrategyRegistry {
@@ -40,17 +41,16 @@ impl StrategyRegistry {
         }
     }
 
-    pub fn create_strategy(
+    pub fn instantiate_strategy(
         &self,
-        name: &String,
-        params: HashMap<String, ParamValue>,
+        def: StrategyInstanceDefinition,
     ) -> Result<Box<dyn Strategy>, CreateStrategyError> {
         let factory = self
             .factories
-            .get(name)
-            .ok_or_else(|| CreateStrategyError::StrategyNotFound(name.to_owned()))?;
+            .get(&def.strategy_name)
+            .ok_or_else(|| CreateStrategyError::StrategyNotFound(def.strategy_name))?;
 
-        factory.create(params)
+        factory.create(def.params)
     }
 
     async fn new(_: ComponentResolver, _: Box<dyn ConfigProvider>) -> Result<Self, ComponentError> {

@@ -31,6 +31,12 @@ pub enum ComponentError {
         #[from]
         source: ConfigError,
     },
+
+    #[error("Component `{source_component}` tried to resolve `{dependency_component}` which is not registered")]
+    UnknownComponent {
+        source_component: String,
+        dependency_component: String,
+    },
 }
 
 pub fn init_err<E: std::error::Error + Send + Sync + 'static>(err: E) -> ComponentError {
