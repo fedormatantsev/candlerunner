@@ -1,12 +1,14 @@
 use futures::stream::StreamExt;
 
-use mongodb::bson::{doc, Document};
+use mongodb::bson::{doc, from_document, to_document, Document};
 use mongodb::options::UpdateOptions;
 use mongodb::{options::ClientOptions, Client, Database};
 
 use component_store::{init_err, prelude::*};
+use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::instruments::{Figi, Instrument, Ticker};
+use crate::models::instruments::Instrument;
+use crate::models::strategy::StrategyInstanceDefinition;
 
 pub struct Mongo {
     db: Database,
@@ -55,15 +57,19 @@ impl Mongo {
         let mut errors = 0;
 
         for instrument in instruments {
+            let doc = match to_document(&instrument) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    println!("Failed to serialize instrument: {}", err);
+                    continue;
+                }
+            };
+
             match collection
                 .update_one(
                     doc! { "figi": &instrument.figi.0 },
                     doc! {
-                        "$set": {
-                            "figi": &instrument.figi.0,
-                            "ticker": &instrument.ticker.0,
-                            "display_name": instrument.display_name
-                        }
+                        "$set": doc
                     },
                     Some(UpdateOptions::builder().upsert(true).build()),
                 )
@@ -71,10 +77,7 @@ impl Mongo {
             {
                 Ok(_) => modified += 1,
                 Err(err) => {
-                    println!(
-                        "Failed to update instrument (ticker: {}, figi: {}): {}",
-                        instrument.ticker.0, instrument.figi.0, err
-                    );
+                    println!("Failed to update instrument {:?}: {}", instrument, err);
                     errors += 1;
                 }
             }
@@ -85,41 +88,57 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn read_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
-        let collection = self.db.collection::<Document>("instruments");
+    async fn read_items<T: Serialize + DeserializeOwned>(
+        &self,
+        collection_name: &'static str,
+    ) -> anyhow::Result<Vec<T>> {
+        let collection = self.db.collection::<Document>(collection_name);
         let cursor = collection.find(None, None).await?;
 
         let res = cursor
-            .fold(Vec::<Instrument>::default(), |mut state, elem| async move {
-                match elem {
-                    Ok(d) => {
-                        let i = make_instrument(&d);
-                        match i {
-                            Some(i) => state.push(i),
-                            None => println!("Failed to parse document: {:?}", d),
+            .fold(Vec::<T>::default(), |mut state, item| async move {
+                match item {
+                    Ok(doc) => {
+                        let res = from_document::<T>(doc).map(|deserialized| {
+                            state.push(deserialized);
+                            ()
+                        });
+
+                        if let Err(err) = res {
+                            println!(
+                                "Failed to parse item from `{}` collection: {}",
+                                collection_name, err
+                            );
                         }
                     }
-                    Err(err) => println!("Failed to get instrument: {}", err),
+                    Err(err) => println!(
+                        "Failed to get item from `{}` collection: {}",
+                        collection_name, err
+                    ),
                 }
 
                 state
             })
             .await;
 
-        println!("Fetched {} instruments", res.len());
+        println!(
+            "Fetched {} items from `{}` collection",
+            res.len(),
+            collection_name
+        );
 
         Ok(res)
     }
-}
 
-fn make_instrument(d: &Document) -> Option<Instrument> {
-    let figi = d.get("figi")?.to_string();
-    let ticker = d.get("ticker")?.to_string();
-    let display_name = d.get("display_name")?.to_string();
+    pub async fn read_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
+        return self.read_items::<Instrument>("instruments").await;
+    }
 
-    Some(Instrument {
-        figi: Figi(figi),
-        ticker: Ticker(ticker),
-        display_name,
-    })
+    pub async fn read_strategy_instance_defs(
+        &self,
+    ) -> anyhow::Result<Vec<StrategyInstanceDefinition>> {
+        return self
+            .read_items::<StrategyInstanceDefinition>("strategy_instances")
+            .await;
+    }
 }

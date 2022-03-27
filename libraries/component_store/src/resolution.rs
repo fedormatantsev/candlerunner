@@ -68,6 +68,7 @@ impl ComponentDAG {
 struct Inner {
     wakers: HashMap<TypeId, Vec<core::task::Waker>>,
     components: HashMap<TypeId, AnyComponent>,
+    known_types: HashSet<TypeId>,
     dag: ComponentDAG,
 }
 
@@ -86,6 +87,13 @@ impl Inner {
         source_info: &ComponentInfo,
         dependency_info: &ComponentInfo,
     ) -> Result<(), ComponentError> {
+        if !self.known_types.contains(&dependency_info.type_id) {
+            return Err(ComponentError::UnknownComponent {
+                source_component: source_info.name.to_string(),
+                dependency_component: dependency_info.name.to_string(),
+            });
+        }
+
         self.add_dependency(source_info, dependency_info)?;
 
         if self.components.contains_key(&dependency_info.type_id) {
@@ -153,6 +161,7 @@ impl ResolutionContext {
     }
 
     pub fn add_component(&self, component_info: &ComponentInfo, component: AnyComponent) {
+        println!("Add component {}", component_info.name);
         self.write_inner(|inner| inner.add_component(component_info, component))
     }
 
@@ -166,6 +175,15 @@ impl ResolutionContext {
 
     pub fn finalize(&self) -> (HashMap<TypeId, AnyComponent>, ComponentDAG) {
         self.read_inner(|inner| (inner.components(), inner.dag()))
+    }
+
+    pub fn new(known_types: HashSet<TypeId>) -> Self {
+        Self {
+            inner: RwLock::new(Inner {
+                known_types,
+                ..Default::default()
+            }),
+        }
     }
 }
 
@@ -210,6 +228,12 @@ impl ComponentResolver {
     }
 
     pub fn resolve<C: Component>(&self) -> ResolveFuture<C> {
+        println!(
+            "Resolve {} from {}",
+            C::component_name(),
+            self.source_info.name
+        );
+
         ResolveFuture {
             context: self.context.clone(),
             source_info: self.source_info,

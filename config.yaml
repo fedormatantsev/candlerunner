@@ -1,9 +1,9 @@
 tinkoff-client:
   url: https://invest-public-api.tinkoff.ru:443
-  auth_token: t.2J_Q_2Ab8dCbYfcq3WUxUHhcJlHAvf4xedpZ71hTKt27Tc68xzGgS-YF367hiPDhg0F34tYe6Qn7PMaSnntgbg
+  auth_token: <token>
 
 instrument-sync:
-  update_period: 3
+  update_period: 600
 
 mongo:
   url: mongodb://127.0.0.1:27017
@@ -11,4 +11,7 @@ mongo:
 strategy-registry: {}
 
 instrument-cache:
-  update_period: 6
+  update_period: 10
+
+strategy-cache:
+  update_period: 5

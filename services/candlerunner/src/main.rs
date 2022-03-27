@@ -22,11 +22,12 @@ async fn main() -> anyhow::Result<()> {
     let config = Box::new(YamlConfigProvider::new(args.config)?);
 
     let component_store = ComponentStore::builder()
-        .register::<components::TinkoffClient>()
-        .register::<components::StrategyRegistry>()
-        .register::<components::InstrumentSync>()
-        .register::<components::Mongo>()
-        .register::<components::InstrumentCache>()
+        .register::<components::InstrumentCache>()?
+        .register::<components::InstrumentSync>()?
+        .register::<components::Mongo>()?
+        .register::<components::StrategyCache>()?
+        .register::<components::StrategyRegistry>()?
+        .register::<components::TinkoffClient>()?
         .build(config)
         .await?;
 
