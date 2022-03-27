@@ -44,7 +44,7 @@ impl<C: Component> ComponentFactory for DefaultComponentFactory<C> {
     ) -> ComponentFuture<Result<(AnyComponent, ComponentDtor, ComponentInfo), ComponentError>> {
         let info = self.component_info();
         Box::pin(async move {
-            let component = C::create(resolver, config).await?;
+            let component = Arc::new(C::init(resolver, config).await?);
             let dtor: ComponentDtor = component.clone();
             let component: AnyComponent = component;
             Ok((component, dtor, info))
@@ -87,8 +87,8 @@ impl DAGDestructor {
 
     pub async fn destroy(self) {
         for (info, dtor) in self.destructors {
-            println!("Destroying {}", info.name);
-            dtor.destroy().await;
+            println!("Shutting down {}", info.name);
+            dtor.shutdown().await;
         }
     }
 }
@@ -218,7 +218,7 @@ impl ComponentStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ComponentName, CreateComponent, DestroyComponent};
+    use crate::{ComponentName, InitComponent, ShutdownComponent};
 
     use super::*;
 
@@ -239,8 +239,8 @@ mod tests {
         _c: Arc<TestComponentC>,
     }
 
-    impl CreateComponent for TestComponentA {
-        fn create(
+    impl InitComponent for TestComponentA {
+        fn init(
             _: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
@@ -248,7 +248,7 @@ mod tests {
         }
     }
 
-    impl DestroyComponent for TestComponentA {}
+    impl ShutdownComponent for TestComponentA {}
 
     impl ComponentName for TestComponentA {
         fn component_name() -> &'static str {
@@ -258,8 +258,8 @@ mod tests {
 
     impl Component for TestComponentA {}
 
-    impl CreateComponent for TestComponentB {
-        fn create(
+    impl InitComponent for TestComponentB {
+        fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
@@ -270,7 +270,7 @@ mod tests {
         }
     }
 
-    impl DestroyComponent for TestComponentB {}
+    impl ShutdownComponent for TestComponentB {}
 
     impl ComponentName for TestComponentB {
         fn component_name() -> &'static str {
@@ -280,8 +280,8 @@ mod tests {
 
     impl Component for TestComponentB {}
 
-    impl CreateComponent for TestComponentC {
-        fn create(
+    impl InitComponent for TestComponentC {
+        fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
@@ -293,7 +293,7 @@ mod tests {
         }
     }
 
-    impl DestroyComponent for TestComponentC {}
+    impl ShutdownComponent for TestComponentC {}
 
     impl ComponentName for TestComponentC {
         fn component_name() -> &'static str {
@@ -303,8 +303,8 @@ mod tests {
 
     impl Component for TestComponentC {}
 
-    impl CreateComponent for TestComponentD {
-        fn create(
+    impl InitComponent for TestComponentD {
+        fn init(
             resolver: ComponentResolver,
             _: Box<dyn ConfigProvider>,
         ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
@@ -321,7 +321,7 @@ mod tests {
         }
     }
 
-    impl DestroyComponent for TestComponentD {}
+    impl ShutdownComponent for TestComponentD {}
 
     impl ComponentName for TestComponentD {
         fn component_name() -> &'static str {

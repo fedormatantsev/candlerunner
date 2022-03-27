@@ -1,5 +1,4 @@
 use std::collections::{hash_map, HashMap};
-use std::sync::Arc;
 
 use component_store::prelude::*;
 
@@ -50,7 +49,7 @@ impl StrategyRegistry {
             .factories
             .get(name)
             .ok_or_else(|| CreateStrategyError::StrategyNotFound(name.to_owned()))?;
-            
+
         factory.create(params)
     }
 
@@ -61,16 +60,16 @@ impl StrategyRegistry {
     }
 }
 
-impl CreateComponent for StrategyRegistry {
-    fn create(
+impl InitComponent for StrategyRegistry {
+    fn init(
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
-    ) -> ComponentFuture<Result<std::sync::Arc<Self>, ComponentError>> {
-        Box::pin(async move { Ok(Arc::new(Self::new(resolver, config).await?)) })
+    ) -> ComponentFuture<Result<Self, ComponentError>> {
+        Box::pin(Self::new(resolver, config))
     }
 }
 
-impl DestroyComponent for StrategyRegistry {}
+impl ShutdownComponent for StrategyRegistry {}
 
 impl ComponentName for StrategyRegistry {
     fn component_name() -> &'static str {

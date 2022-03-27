@@ -12,7 +12,7 @@ pub type PeriodicCreateFuture<P> = Pin<Box<dyn Future<Output = Result<P, Compone
 pub trait Periodic: ComponentName + Send + Sync + Sized + 'static {
     type State: Send + Sync + 'static;
 
-    fn create(
+    fn init(
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> PeriodicCreateFuture<(Self, Self::State)>;
@@ -61,15 +61,15 @@ impl<P: Periodic> PeriodicComponent<P> {
     }
 }
 
-impl<P: Periodic> CreateComponent for PeriodicComponent<P> {
-    fn create(
+impl<P: Periodic> InitComponent for PeriodicComponent<P> {
+    fn init(
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
-    ) -> ComponentFuture<Result<Arc<Self>, ComponentError>> {
+    ) -> ComponentFuture<Result<Self, ComponentError>> {
         Box::pin(async move {
             let period = time::Duration::from_secs(config.get_u64("update_period")?);
 
-            let (mut periodic, init_state) = P::create(resolver, config).await?;
+            let (mut periodic, init_state) = P::init(resolver, config).await?;
             let init_state = Arc::new(init_state);
 
             let state = match periodic.step(init_state.clone()).await {
@@ -111,18 +111,18 @@ impl<P: Periodic> CreateComponent for PeriodicComponent<P> {
                 println!("Stopping periodic: {}", P::component_name());
             });
 
-            Ok(Arc::new(Self {
+            Ok(Self {
                 state: state_holder,
                 inner: Mutex::new(Some(inner)),
                 stop,
                 _marker: PhantomData,
-            }))
+            })
         })
     }
 }
 
-impl<P: Periodic> DestroyComponent for PeriodicComponent<P> {
-    fn destroy(&self) -> ComponentFuture<()> {
+impl<P: Periodic> ShutdownComponent for PeriodicComponent<P> {
+    fn shutdown(&self) -> ComponentFuture<()> {
         fn ready() -> ComponentFuture<()> {
             Box::pin(std::future::ready(()))
         }

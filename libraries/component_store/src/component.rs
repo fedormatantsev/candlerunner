@@ -39,15 +39,18 @@ pub fn init_err<E: std::error::Error + Send + Sync + 'static>(err: E) -> Compone
     }
 }
 
-pub trait CreateComponent {
-    fn create(
+pub trait InitComponent
+where
+    Self: Sized,
+{
+    fn init(
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
-    ) -> ComponentFuture<Result<Arc<Self>, ComponentError>>;
+    ) -> ComponentFuture<Result<Self, ComponentError>>;
 }
 
-pub trait DestroyComponent {
-    fn destroy(&self) -> ComponentFuture<()> {
+pub trait ShutdownComponent {
+    fn shutdown(&self) -> ComponentFuture<()> {
         Box::pin(std::future::ready(()))
     }
 }
@@ -57,12 +60,12 @@ pub trait ComponentName {
 }
 
 pub trait Component:
-    CreateComponent + DestroyComponent + ComponentName + Send + Sync + 'static
+    InitComponent + ShutdownComponent + ComponentName + Send + Sync + 'static
 {
 }
 
 pub type AnyComponent = Arc<dyn Any + Send + Sync + 'static>;
-pub type ComponentDtor = Arc<dyn DestroyComponent + Send + Sync + 'static>;
+pub type ComponentDtor = Arc<dyn ShutdownComponent + Send + Sync + 'static>;
 
 #[derive(Copy, Clone)]
 pub struct ComponentInfo {

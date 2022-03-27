@@ -19,7 +19,7 @@ impl ComponentName for InstrumentSyncPeriodic {
 impl Periodic for InstrumentSyncPeriodic {
     type State = ();
 
-    fn create(
+    fn init(
         resolver: ComponentResolver,
         _: Box<dyn ConfigProvider>,
     ) -> periodic_component::PeriodicCreateFuture<(Self, Self::State)> {

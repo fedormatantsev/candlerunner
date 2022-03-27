@@ -20,7 +20,7 @@ impl ComponentName for InstrumentCachePeriodic {
 impl Periodic for InstrumentCachePeriodic {
     type State = HashMap<Figi, Instrument>;
 
-    fn create(
+    fn init(
         resolver: ComponentResolver,
         _: Box<dyn ConfigProvider>,
     ) -> PeriodicCreateFuture<(Self, Self::State)> {
@@ -29,7 +29,7 @@ impl Periodic for InstrumentCachePeriodic {
 
             // Ensures that instrument-sync is initialized before cache initialization.
             // Otherwise, we might get empty cache on startup with fresh new db.
-            let _ = resolver.resolve::<components::InstrumentSync>().await?; 
+            let _ = resolver.resolve::<components::InstrumentSync>().await?;
 
             let periodic = InstrumentCachePeriodic { mongo };
             let init_state = Self::State::default();
