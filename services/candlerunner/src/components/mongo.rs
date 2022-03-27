@@ -7,6 +7,7 @@ use mongodb::{options::ClientOptions, Client, Database};
 use component_store::{init_err, prelude::*};
 
 use crate::models::instruments::{Figi, Instrument, Ticker};
+use crate::models::strategy::StrategyInstanceDefinition;
 
 pub struct Mongo {
     db: Database,
@@ -110,6 +111,38 @@ impl Mongo {
 
         Ok(res)
     }
+
+    pub async fn read_strategy_instance_defs(
+        &self,
+    ) -> anyhow::Result<Vec<StrategyInstanceDefinition>> {
+        let collection = self
+            .db
+            .collection::<Document>("strategy_instance_definitions");
+
+        let cursor = collection.find(None, None).await?;
+
+        let res = cursor
+            .fold(
+                Vec::<StrategyInstanceDefinition>::default(),
+                |mut state, elem| async move {
+                    match elem {
+                        Ok(d) => {
+                            let def = make_definition(&d);
+                            match def {
+                                Some(def) => state.push(def),
+                                None => println!("Failed to parse document: {:?}", d),
+                            }
+                        }
+                        Err(err) => println!("Failed to get instrument: {}", err),
+                    }
+
+                    state
+                },
+            )
+            .await;
+
+        Ok(res)
+    }
 }
 
 fn make_instrument(d: &Document) -> Option<Instrument> {
@@ -121,5 +154,14 @@ fn make_instrument(d: &Document) -> Option<Instrument> {
         figi: Figi(figi),
         ticker: Ticker(ticker),
         display_name,
+    })
+}
+
+fn make_definition(d: &Document) -> Option<StrategyInstanceDefinition> {
+    let strategy_name = d.get("strategy_name")?.to_string();
+
+    Some(StrategyInstanceDefinition {
+        strategy_name,
+        params: Default::default(),
     })
 }

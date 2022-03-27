@@ -1,10 +1,10 @@
 use std::collections::{hash_map, HashMap};
+use std::sync::Arc;
 
 use component_store::prelude::*;
 
 use crate::models::strategy::{
-    CreateStrategyError, Strategy, StrategyDefinition, StrategyFactory,
-    StrategyInstanceDefinition,
+    CreateStrategyError, Strategy, StrategyDefinition, StrategyFactory, StrategyInstanceDefinition,
 };
 
 pub struct StrategyRegistry {
@@ -44,7 +44,7 @@ impl StrategyRegistry {
     pub fn instantiate_strategy(
         &self,
         def: StrategyInstanceDefinition,
-    ) -> Result<Box<dyn Strategy>, CreateStrategyError> {
+    ) -> Result<Arc<dyn Strategy>, CreateStrategyError> {
         let factory = self
             .factories
             .get(&def.strategy_name)
