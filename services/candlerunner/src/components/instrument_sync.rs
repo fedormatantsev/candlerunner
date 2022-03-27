@@ -17,22 +17,26 @@ impl ComponentName for InstrumentSyncPeriodic {
 }
 
 impl Periodic for InstrumentSyncPeriodic {
+    type State = ();
+
     fn create(
         resolver: ComponentResolver,
         _: Box<dyn ConfigProvider>,
-    ) -> periodic_component::PeriodicCreateFuture<Self> {
+    ) -> periodic_component::PeriodicCreateFuture<(Self, Self::State)> {
         Box::pin(async move {
             let tinkoff_client = resolver.resolve::<components::TinkoffClient>().await?;
             let mongo = resolver.resolve::<components::Mongo>().await?;
 
-            Ok(Self {
+            let periodic = Self {
                 tinkoff_client,
                 mongo,
-            })
+            };
+
+            Ok((periodic, ()))
         })
     }
 
-    fn step(&mut self) -> periodic_component::PeriodicFuture {
+    fn step(&mut self, state: Arc<Self::State>) -> periodic_component::PeriodicFuture<Self::State> {
         let tinkoff_client = self.tinkoff_client.clone();
         let mongo = self.mongo.clone();
 
@@ -40,7 +44,7 @@ impl Periodic for InstrumentSyncPeriodic {
             let instruments = tinkoff_client.get_instruments().await?;
             mongo.write_instruments(instruments).await?;
 
-            Ok(())
+            Ok(state)
         })
     }
 }

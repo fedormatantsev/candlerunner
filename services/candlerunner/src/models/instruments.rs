@@ -1,7 +1,7 @@
-#[derive(Debug)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Figi(pub String);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ticker(pub String);
 
 #[derive(Debug)]

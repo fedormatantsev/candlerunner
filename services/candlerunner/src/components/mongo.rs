@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
+use futures::stream::StreamExt;
+
 use mongodb::bson::{doc, Document};
 use mongodb::options::UpdateOptions;
 use mongodb::{options::ClientOptions, Client, Database};
 
 use component_store::{init_err, prelude::*};
 
-use crate::models::instruments::Instrument;
+use crate::models::instruments::{Figi, Instrument, Ticker};
 
 pub struct Mongo {
     db: Database,
@@ -86,4 +88,42 @@ impl Mongo {
 
         Ok(())
     }
+
+    pub async fn read_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
+        let collection = self.db.collection::<Document>("instruments");
+        let cursor = collection.find(None, None).await?;
+
+        let res = cursor
+            .fold(Vec::<Instrument>::default(), |mut state, elem| async move {
+                match elem {
+                    Ok(d) => {
+                        let i = make_instrument(&d);
+                        match i {
+                            Some(i) => state.push(i),
+                            None => println!("Failed to parse document: {:?}", d),
+                        }
+                    }
+                    Err(err) => println!("Failed to get instrument: {}", err),
+                }
+
+                state
+            })
+            .await;
+
+        println!("Fetched {} instruments", res.len());
+
+        Ok(res)
+    }
+}
+
+fn make_instrument(d: &Document) -> Option<Instrument> {
+    let figi = d.get("figi")?.to_string();
+    let ticker = d.get("ticker")?.to_string();
+    let display_name = d.get("display_name")?.to_string();
+
+    Some(Instrument {
+        figi: Figi(figi),
+        ticker: Ticker(ticker),
+        display_name,
+    })
 }
