@@ -1,6 +1,7 @@
 mod components;
 mod generated;
 mod models;
+mod strategies;
 
 use anyhow;
 use clap::Parser;
