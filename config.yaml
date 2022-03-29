@@ -1,3 +1,6 @@
+service:
+  address: 127.0.0.1:27001
+
 tinkoff-client:
   url: https://invest-public-api.tinkoff.ru:443
   auth_token: <token>

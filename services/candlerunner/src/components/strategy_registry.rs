@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use component_store::prelude::*;
 
+use crate::components;
 use crate::models::strategy::{
-    CreateStrategyError, Strategy, StrategyDefinition, StrategyFactory, StrategyInstanceDefinition,
+    CreateStrategyError, ParamType, ParamValue, Strategy, StrategyDefinition, StrategyFactory,
+    StrategyInstanceDefinition,
 };
 use crate::strategies;
 
@@ -51,6 +53,7 @@ impl Builder {
 
 pub struct StrategyRegistry {
     factories: HashMap<String, Box<dyn StrategyFactory>>,
+    instrument_cache: Arc<components::InstrumentCache>,
 }
 
 impl StrategyRegistry {
@@ -60,22 +63,87 @@ impl StrategyRegistry {
         }
     }
 
-    pub fn instantiate_strategy(
+    pub fn validate_instance_definition(
         &self,
-        def: StrategyInstanceDefinition,
-    ) -> Result<Arc<dyn Strategy>, CreateStrategyError> {
-        let factory = self.factories.get(def.strategy_name()).ok_or_else(|| {
-            CreateStrategyError::StrategyNotFound(def.strategy_name().to_string())
-        })?;
+        instance_definition: &StrategyInstanceDefinition,
+    ) -> Result<(), CreateStrategyError> {
+        let factory = self
+            .factories
+            .get(instance_definition.strategy_name())
+            .ok_or_else(|| {
+                CreateStrategyError::StrategyNotFound(
+                    instance_definition.strategy_name().to_string(),
+                )
+            })?;
 
-        factory.create(def.params())
+        let instruments = self.instrument_cache.state();
+
+        for (param_name, _) in instance_definition.params() {
+            if factory
+                .definition()
+                .params()
+                .iter()
+                .find(|expected_param| (*expected_param).name() == param_name)
+                .is_none()
+            {
+                return Err(CreateStrategyError::InvalidParam(param_name.to_string()));
+            }
+        }
+
+        for expected_param in factory.definition().params() {
+            let actual_value = instance_definition
+                .params()
+                .get(expected_param.name())
+                .ok_or_else(|| {
+                    CreateStrategyError::ParamMissing(expected_param.name().to_string())
+                })?;
+
+            let actual_type = ParamType::from(actual_value);
+
+            if *expected_param.param_type() != actual_type {
+                return Err(CreateStrategyError::ParamTypeMismatch(
+                    expected_param.name().to_string(),
+                ));
+            }
+
+            if let ParamValue::Instrument(ref figi) = actual_value {
+                if !instruments.contains_key(figi) {
+                    return Err(CreateStrategyError::FailedToInstantiateStrategy(format!(
+                        "Instrument `{}` not found in cache",
+                        figi.0
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 
-    async fn new(_: ComponentResolver, _: Box<dyn ConfigProvider>) -> Result<Self, ComponentError> {
+    pub fn instantiate_strategy(
+        &self,
+        instance_definition: StrategyInstanceDefinition,
+    ) -> Result<Arc<dyn Strategy>, CreateStrategyError> {
+        let factory = self
+            .factories
+            .get(instance_definition.strategy_name())
+            .ok_or_else(|| {
+                CreateStrategyError::StrategyNotFound(
+                    instance_definition.strategy_name().to_string(),
+                )
+            })?;
+
+        factory.create(instance_definition.params())
+    }
+
+    async fn new(
+        resolver: ComponentResolver,
+        _: Box<dyn ConfigProvider>,
+    ) -> Result<Self, ComponentError> {
         Ok(Self {
             factories: Builder::default()
                 .register(strategies::BuyAndHoldFactory::default())
                 .build(),
+            instrument_cache: resolver.resolve::<components::InstrumentCache>().await?,
         })
     }
 }
