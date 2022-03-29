@@ -30,6 +30,10 @@ fn generate_proto_package<P: AsRef<std::path::Path>>(
         let entry_path = entry?.path();
 
         if entry_path.is_file() && entry_path.extension() == Some(proto_extension) {
+            println!(
+                "cargo:rerun-if-changed={}",
+                entry_path.as_os_str().to_string_lossy()
+            );
             protos.push(entry_path);
         }
     }

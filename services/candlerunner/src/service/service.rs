@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use component_store::{ComponentName, ComponentStore};
@@ -9,6 +10,46 @@ use crate::generated::candlerunner_api::{
     self,
     candlerunner_service_server::{CandlerunnerService, CandlerunnerServiceServer},
 };
+
+use crate::models::instruments::Figi;
+use crate::models::strategy::{ParamType, ParamValue, StrategyInstanceDefinition};
+
+impl TryFrom<candlerunner_api::StrategyInstanceDefinition> for StrategyInstanceDefinition {
+    type Error = Status;
+
+    fn try_from(proto: candlerunner_api::StrategyInstanceDefinition) -> Result<Self, Self::Error> {
+        let mut params: HashMap<String, ParamValue> = Default::default();
+
+        for proto_param in proto.params {
+            if proto_param.param_name.is_empty() {
+                return Err(Status::invalid_argument("Param name is not specified"));
+            }
+
+            let proto_value = proto_param
+                .param_value
+                .and_then(|v| v.value)
+                .ok_or_else(|| {
+                    Status::invalid_argument(format!(
+                        "Parameter `{}` missing value field",
+                        &proto_param.param_name
+                    ))
+                })?;
+
+            let value = match proto_value {
+                candlerunner_api::param_value::Value::InstrumentVal(figi) => {
+                    ParamValue::Instrument(Figi(figi))
+                }
+                candlerunner_api::param_value::Value::IntegerVal(i) => ParamValue::Integer(i),
+                candlerunner_api::param_value::Value::FloatVal(f) => ParamValue::Float(f),
+                candlerunner_api::param_value::Value::BooleanVal(b) => ParamValue::Boolean(b),
+            };
+
+            params.insert(proto_param.param_name, value);
+        }
+
+        Ok(StrategyInstanceDefinition::new(proto.strategy_name, params))
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -52,11 +93,11 @@ impl Service {
 impl CandlerunnerService for Service {
     async fn instruments(
         &self,
-        request: Request<candlerunner_api::InstrumentsRequest>,
+        _: Request<candlerunner_api::InstrumentsRequest>,
     ) -> Result<Response<candlerunner_api::InstrumentsResponse>, Status> {
-        let instruments = self.instruments_cache.state();
-
-        let instruments: Vec<candlerunner_api::Instrument> = instruments
+        let instruments: Vec<_> = self
+            .instruments_cache
+            .state()
             .values()
             .cloned()
             .map(|i| candlerunner_api::Instrument {
@@ -73,15 +114,65 @@ impl CandlerunnerService for Service {
 
     async fn strategy_definitions(
         &self,
-        request: Request<candlerunner_api::StrategyDefinitionsRequest>,
+        _: Request<candlerunner_api::StrategyDefinitionsRequest>,
     ) -> Result<Response<candlerunner_api::StrategyDefinitionsResponse>, Status> {
-        todo!()
+        fn to_param_type(t: &ParamType) -> candlerunner_api::ParamType {
+            match t {
+                ParamType::Instrument => candlerunner_api::ParamType::Instrument,
+                ParamType::Integer => candlerunner_api::ParamType::Integer,
+                ParamType::Float => candlerunner_api::ParamType::Float,
+                ParamType::Boolean => candlerunner_api::ParamType::Boolean,
+            }
+        }
+
+        let definitions: Vec<_> = self
+            .strategy_registry
+            .definitions()
+            .map(|def| {
+                let params: Vec<_> = def
+                    .params()
+                    .iter()
+                    .map(|p| candlerunner_api::ParamDefinition {
+                        param_name: p.name().to_string(),
+                        description: p.description().to_string(),
+                        param_type: to_param_type(p.param_type()) as i32,
+                        default_value: None,
+                    })
+                    .collect();
+
+                candlerunner_api::StrategyDefinition {
+                    strategy_name: def.strategy_name().to_string(),
+                    description: def.strategy_description().to_string(),
+                    params,
+                }
+            })
+            .collect();
+
+        Ok(Response::new(
+            candlerunner_api::StrategyDefinitionsResponse { definitions },
+        ))
     }
 
     async fn instantiate_strategy(
         &self,
         request: Request<candlerunner_api::InstantiateStrategyRequest>,
     ) -> Result<Response<candlerunner_api::InstantiateStrategyResponse>, Status> {
-        todo!()
+        let proto_definition = request
+            .into_inner()
+            .instance_definition
+            .ok_or_else(|| Status::invalid_argument("Field `instance_definition` is missing"))?;
+
+        let instance_def = StrategyInstanceDefinition::try_from(proto_definition)?;
+        self.strategy_registry
+            .validate_instance_definition(&instance_def)
+            .map_err(|err| Status::internal(err.to_string()))?;
+
+        // TODO: write instance_def to db and await for forced update of strategy_cache;
+
+        Ok(Response::new(
+            candlerunner_api::InstantiateStrategyResponse {
+                instance_id: instance_def.id().to_string(), // kludge
+            },
+        ))
     }
 }

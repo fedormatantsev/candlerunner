@@ -7,11 +7,23 @@ use uuid::Uuid;
 
 use crate::models::instruments::Figi;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamType {
     Instrument,
     Integer,
     Float,
     Boolean,
+}
+
+impl From<&ParamValue> for ParamType {
+    fn from(value: &ParamValue) -> Self {
+        match value {
+            ParamValue::Instrument(_) => Self::Instrument,
+            ParamValue::Integer(_) => Self::Integer,
+            ParamValue::Float(_) => Self::Float,
+            ParamValue::Boolean(_) => Self::Boolean,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -26,7 +38,7 @@ pub struct ParamDefinition {
     name: String,
     description: String,
     param_type: ParamType,
-    default: Option<ParamValue>,
+    default_value: Option<ParamValue>,
 }
 
 impl ParamDefinition {
@@ -34,14 +46,18 @@ impl ParamDefinition {
         name: N,
         description: D,
         param_type: ParamType,
-        default: Option<ParamValue>,
+        default_value: Option<ParamValue>,
     ) -> Self {
         Self {
             name: name.to_string(),
             description: description.to_string(),
             param_type,
-            default,
+            default_value,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn description(&self) -> &str {
@@ -52,8 +68,8 @@ impl ParamDefinition {
         &self.param_type
     }
 
-    pub fn default(&self) -> &Option<ParamValue> {
-        &self.default
+    pub fn default_value(&self) -> &Option<ParamValue> {
+        &self.default_value
     }
 }
 
@@ -93,7 +109,7 @@ impl StrategyInstanceDefinition {
 
         sorted_params.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
 
-        for (param_name, param_value) in &self.params {
+        for (param_name, param_value) in sorted_params {
             bytes.extend_from_slice(param_name.as_bytes());
             bytes.push(0);
 
@@ -179,10 +195,12 @@ pub enum CreateStrategyError {
     StrategyNotFound(String),
     #[error("Strategy parameter `{0}` is not specified")]
     ParamMissing(String),
+    #[error("Invalid strategy parameter `{0}`")]
+    InvalidParam(String),
     #[error("Strategy parameter `{0}` is of wrong type")]
     ParamTypeMismatch(String),
-    #[error("Failed to instantiate strategy")]
-    FailedToInstantiateStrategy { source: anyhow::Error },
+    #[error("Failed to instantiate strategy: {0}")]
+    FailedToInstantiateStrategy(String),
 }
 
 pub trait StrategyFactory: Sync + Send + 'static {

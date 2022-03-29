@@ -22,17 +22,18 @@ enum ParamType {
 
 message ParamValue {
     oneof value {
-        string figi_val = 1;
+        string instrument_val = 1;
         int64 integer_val = 2;
-        float float_val = 3;
-        bool bool_val = 4;
+        double float_val = 3;
+        bool boolean_val = 4;
     }
 }
 
 message ParamDefinition {
     string param_name = 1;
-    ParamType param_type = 2;
-    ParamValue default_value = 3;
+    string description = 2;
+    ParamType param_type = 3;
+    ParamValue default_value = 4;
 }
 
 message StrategyDefinition {
@@ -51,9 +52,13 @@ message Param {
     ParamValue param_value = 2;
 }
 
-message InstantiateStrategyRequest {
+message StrategyInstanceDefinition {
     string strategy_name = 1;
     repeated Param params = 2;
+}
+
+message InstantiateStrategyRequest {
+    StrategyInstanceDefinition instance_definition = 1;
 }
 
 enum InstantiateStrategyErrorCode {
@@ -63,16 +68,8 @@ enum InstantiateStrategyErrorCode {
     FAILED_TO_INSTANTIATE = 3;
 }
 
-message InstantiateStrategyError {
-    string text = 1;
-    InstantiateStrategyErrorCode code = 2;
-}
-
 message InstantiateStrategyResponse {
-    oneof result {
-        string id = 1;
-        InstantiateStrategyError error = 2;
-    }
+    string instance_id = 1;
 }
 
 service CandlerunnerService {
