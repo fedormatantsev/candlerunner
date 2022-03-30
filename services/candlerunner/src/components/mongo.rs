@@ -134,9 +134,25 @@ impl Mongo {
         return self.read_items::<Instrument>("instruments").await;
     }
 
-    pub async fn read_strategy_instance_defs(
+    pub async fn write_strategy_instance(
         &self,
-    ) -> anyhow::Result<Vec<StrategyInstanceDefinition>> {
+        instance_def: &StrategyInstanceDefinition,
+    ) -> anyhow::Result<()> {
+        let collection = self.db.collection::<Document>("strategy_instances");
+        let doc = to_document(instance_def)?;
+
+        collection
+            .update_one(
+                doc! {"_id": instance_def.id()},
+                doc! {"$set": doc},
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn read_strategy_instances(&self) -> anyhow::Result<Vec<StrategyInstanceDefinition>> {
         return self
             .read_items::<StrategyInstanceDefinition>("strategy_instances")
             .await;

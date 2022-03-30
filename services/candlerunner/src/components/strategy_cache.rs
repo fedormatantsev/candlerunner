@@ -31,58 +31,7 @@ impl Periodic for StrategyCachePeriodic {
     }
 
     fn step(&mut self, prev_state: Arc<Self::State>) -> PeriodicFuture<Self::State> {
-        let mongo = self.mongo.clone();
-        let registry = self.registry.clone();
-
-        Box::pin(async move {
-            let defs = mongo.read_strategy_instance_defs().await?;
-
-            let mut inserted = 0;
-            let mut failed = 0;
-
-            let mut instantiate =
-                |id: Uuid, def: StrategyInstanceDefinition, state: &mut Self::State| {
-                    match registry.instantiate_strategy(def) {
-                        Ok(instance) => {
-                            state.insert(id, instance);
-                            inserted += 1;
-                        }
-                        Err(err) => {
-                            println!("Failed to instantiate strategy: {}", err);
-                            failed += 1;
-                        }
-                    };
-                };
-
-            let new_state = defs
-                .into_iter()
-                .fold(Self::State::default(), |mut state, def| {
-                    let id = def.id();
-
-                    match prev_state.get(&id) {
-                        Some(instance) => {
-                            state.insert(id, instance.clone());
-                            return state;
-                        }
-                        None => {
-                            instantiate(id, def, &mut state);
-                            return state;
-                        }
-                    }
-                });
-
-            let removed = prev_state.len() - (new_state.len() - inserted);
-
-            println!(
-                "Updated strategy cache: {} inserted, {} removed, {} failed, {} total",
-                inserted,
-                removed,
-                failed,
-                new_state.len()
-            );
-
-            Ok(Arc::new(new_state))
-        })
+        Box::pin(self.step(prev_state))
     }
 }
 
@@ -98,6 +47,59 @@ impl StrategyCachePeriodic {
             Self { mongo, registry },
             <Self as Periodic>::State::default(),
         ))
+    }
+
+    async fn step(
+        &mut self,
+        prev_state: Arc<<Self as Periodic>::State>,
+    ) -> anyhow::Result<Arc<<Self as Periodic>::State>> {
+        let defs = self.mongo.read_strategy_instances().await?;
+
+        let mut inserted = 0;
+        let mut failed = 0;
+
+        let mut instantiate =
+            |id: Uuid, def: StrategyInstanceDefinition, state: &mut <Self as Periodic>::State| {
+                match self.registry.instantiate_strategy(def) {
+                    Ok(instance) => {
+                        state.insert(id, instance);
+                        inserted += 1;
+                    }
+                    Err(err) => {
+                        println!("Failed to instantiate strategy: {}", err);
+                        failed += 1;
+                    }
+                };
+            };
+
+        let new_state =
+            defs.into_iter()
+                .fold(<Self as Periodic>::State::default(), |mut state, def| {
+                    let id = def.id();
+
+                    match prev_state.get(&id) {
+                        Some(instance) => {
+                            state.insert(id, instance.clone());
+                            return state;
+                        }
+                        None => {
+                            instantiate(id, def, &mut state);
+                            return state;
+                        }
+                    }
+                });
+
+        let removed = prev_state.len() - (new_state.len() - inserted);
+
+        println!(
+            "Updated strategy cache: {} inserted, {} removed, {} failed, {} total",
+            inserted,
+            removed,
+            failed,
+            new_state.len()
+        );
+
+        Ok(Arc::new(new_state))
     }
 }
 

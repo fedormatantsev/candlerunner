@@ -39,10 +39,8 @@ impl Periodic for InstrumentCachePeriodic {
     }
 
     fn step(&mut self, _: Arc<Self::State>) -> PeriodicFuture<Self::State> {
-        let mongo = self.mongo.clone();
-
         Box::pin(async move {
-            let instruments: HashMap<_, _> = mongo
+            let instruments: HashMap<_, _> = self.mongo
                 .read_instruments()
                 .await?
                 .into_iter()
