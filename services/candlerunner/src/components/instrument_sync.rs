@@ -37,12 +37,9 @@ impl Periodic for InstrumentSyncPeriodic {
     }
 
     fn step(&mut self, state: Arc<Self::State>) -> periodic_component::PeriodicFuture<Self::State> {
-        let tinkoff_client = self.tinkoff_client.clone();
-        let mongo = self.mongo.clone();
-
         Box::pin(async move {
-            let instruments = tinkoff_client.get_instruments().await?;
-            mongo.write_instruments(instruments).await?;
+            let instruments = self.tinkoff_client.get_instruments().await?;
+            self.mongo.write_instruments(instruments).await?;
 
             Ok(state)
         })

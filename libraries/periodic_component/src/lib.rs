@@ -3,11 +3,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{future::Future, marker::PhantomData};
 
-use tokio::{sync::watch, task::JoinHandle, time};
+use tokio::{sync::mpsc, sync::Notify, task::JoinHandle, time};
 
 use component_store::prelude::*;
 
-pub type PeriodicFuture<S> = Pin<Box<dyn Future<Output = anyhow::Result<Arc<S>>> + Send>>;
+pub type PeriodicFuture<'periodic, S> =
+    Pin<Box<dyn Future<Output = anyhow::Result<Arc<S>>> + Send + 'periodic>>;
 pub type PeriodicCreateFuture<P> = Pin<Box<dyn Future<Output = Result<P, ComponentError>> + Send>>;
 pub trait Periodic: ComponentName + Send + Sync + Sized + 'static {
     type State: Send + Sync + 'static;
@@ -16,7 +17,11 @@ pub trait Periodic: ComponentName + Send + Sync + Sized + 'static {
         resolver: ComponentResolver,
         config: Box<dyn ConfigProvider>,
     ) -> PeriodicCreateFuture<(Self, Self::State)>;
-    fn step(&mut self, state: Arc<Self::State>) -> PeriodicFuture<Self::State>;
+
+    fn step<'periodic>(
+        &'periodic mut self,
+        state: Arc<Self::State>,
+    ) -> PeriodicFuture<'periodic, Self::State>;
 }
 
 struct StateHolder<S> {
@@ -48,16 +53,55 @@ impl<S> StateHolder<S> {
 unsafe impl<S> Sync for StateHolder<S> {}
 unsafe impl<S> Send for StateHolder<S> {}
 
+enum Control {
+    // Stop periodic updates.
+    Stop,
+
+    // Perform usual periodic update.
+    Update,
+
+    // Perform forced update.
+    ForceUpdate(Arc<Notify>),
+}
+
 pub struct PeriodicComponent<P: Periodic> {
     state: Arc<StateHolder<P::State>>,
     inner: Mutex<Option<JoinHandle<()>>>,
-    stop: watch::Sender<bool>,
+    control: mpsc::Sender<Control>,
     _marker: PhantomData<P>,
 }
 
 impl<P: Periodic> PeriodicComponent<P> {
     pub fn state(&self) -> Arc<P::State> {
         self.state.get()
+    }
+
+    pub async fn force_update(&self, timeout: Option<time::Duration>) {
+        let notify = Arc::new(Notify::default());
+
+        if let Err(err) = self
+            .control
+            .send(Control::ForceUpdate(notify.clone()))
+            .await
+        {
+            print!(
+                "Failed to initiate forced update for periodic {}: {}",
+                P::component_name(),
+                err
+            );
+
+            return;
+        }
+
+        let sleep = match timeout {
+            Some(duration) => time::sleep(duration),
+            None => { return; },
+        };
+
+        tokio::select! {
+            _ = sleep => { println!("Forced update timed out for periodic {}", P::component_name()); },
+            _ = notify.notified() => ()
+        };
     }
 }
 
@@ -83,22 +127,62 @@ impl<P: Periodic> InitComponent for PeriodicComponent<P> {
 
             let state_holder = Arc::new(StateHolder::new(state));
 
-            let (stop, mut will_stop) = watch::channel(false);
+            let (control, mut control_receiver) = mpsc::channel(32);
 
             let inner_state = state_holder.clone();
             let inner = tokio::spawn(async move {
                 let mut interval = time::interval(period);
                 interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+
+                // First tick fires instantly. We have already called step() on initialization.
                 interval.tick().await;
 
                 loop {
-                    tokio::select! {
-                        _ = interval.tick() => (),
-                        _ = will_stop.changed() => ()
+                    let first_ctrl = tokio::select! {
+                        _ = interval.tick() => Some(Control::Update),
+                        ctrl = control_receiver.recv() => ctrl
                     };
 
-                    if *will_stop.borrow() {
+                    let first_ctrl = match first_ctrl {
+                        Some(ctrl) => ctrl,
+                        None => {
+                            println!(
+                                "Control channel was closed for periodic {}",
+                                P::component_name()
+                            );
+                            break;
+                        }
+                    };
+
+                    let mut will_stop = false;
+                    let mut will_force_update = false;
+                    let mut notifies: Vec<Arc<Notify>> = Default::default();
+
+                    let mut visit = |ctrl: Control| match ctrl {
+                        Control::Stop => {
+                            will_stop = true;
+                        }
+                        Control::Update => (),
+                        Control::ForceUpdate(notify) => {
+                            notifies.push(notify);
+                            will_force_update = true;
+                        }
+                    };
+
+                    visit(first_ctrl);
+
+                    while let Ok(next_ctrl) = control_receiver.try_recv() {
+                        visit(next_ctrl);
+                    }
+
+                    if will_stop {
                         break;
+                    }
+                    if will_force_update {
+                        println!(
+                            "Performing forced update for periodic {}",
+                            P::component_name()
+                        );
                     }
 
                     match periodic.step(inner_state.get()).await {
@@ -106,6 +190,10 @@ impl<P: Periodic> InitComponent for PeriodicComponent<P> {
                         Err(err) => {
                             println!("Periodic {} update failed: {}", P::component_name(), err)
                         }
+                    }
+
+                    for notify in notifies {
+                        notify.notify_one();
                     }
                 }
 
@@ -116,7 +204,7 @@ impl<P: Periodic> InitComponent for PeriodicComponent<P> {
             Ok(Self {
                 state: state_holder,
                 inner: Mutex::new(Some(inner)),
-                stop,
+                control,
                 _marker: PhantomData,
             })
         })
@@ -127,11 +215,6 @@ impl<P: Periodic> ShutdownComponent for PeriodicComponent<P> {
     fn shutdown(&self) -> ComponentFuture<()> {
         fn ready() -> ComponentFuture<()> {
             Box::pin(std::future::ready(()))
-        }
-
-        if self.stop.send(true).is_err() {
-            println!("Failed to gracefully stop {}", P::component_name());
-            return ready();
         }
 
         enum AcquisitionError {
@@ -162,7 +245,17 @@ impl<P: Periodic> ShutdownComponent for PeriodicComponent<P> {
             }
         };
 
+        let control = self.control.clone();
         Box::pin(async move {
+            if control.send(Control::Stop).await.is_err() {
+                println!(
+                    "Failed to gracefully shutdown periodic {}",
+                    P::component_name()
+                );
+
+                return;
+            }
+
             if inner.await.is_err() {
                 println!("Failed to join periodic task of {}", P::component_name())
             }

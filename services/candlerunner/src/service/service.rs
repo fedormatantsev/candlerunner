@@ -60,6 +60,8 @@ pub enum ServiceError {
 pub struct Service {
     instruments_cache: Arc<components::InstrumentCache>,
     strategy_registry: Arc<components::StrategyRegistry>,
+    strategy_cache: Arc<components::StrategyCache>,
+    mongo: Arc<components::Mongo>,
 }
 
 impl Service {
@@ -82,9 +84,27 @@ impl Service {
                 )
             })?;
 
+        let strategy_cache = component_store
+            .resolve::<components::StrategyCache>()
+            .ok_or_else(|| {
+                ServiceError::FailedToResolveComponent(
+                    components::StrategyCache::component_name().to_string(),
+                )
+            })?;
+
+        let mongo = component_store
+            .resolve::<components::Mongo>()
+            .ok_or_else(|| {
+                ServiceError::FailedToResolveComponent(
+                    components::Mongo::component_name().to_string(),
+                )
+            })?;
+
         Ok(CandlerunnerServiceServer::new(Self {
             instruments_cache,
             strategy_registry,
+            strategy_cache,
+            mongo,
         }))
     }
 }
@@ -167,11 +187,25 @@ impl CandlerunnerService for Service {
             .validate_instance_definition(&instance_def)
             .map_err(|err| Status::internal(err.to_string()))?;
 
-        // TODO: write instance_def to db and await for forced update of strategy_cache;
+        self.mongo
+            .write_strategy_instance(&instance_def)
+            .await
+            .map_err(|err| {
+                Status::internal(format!("Failed to write strategy instance to db: {}", err))
+            })?;
+
+        self.strategy_cache
+            .force_update(Some(std::time::Duration::from_millis(100)))
+            .await;
+
+        let id = instance_def.id();
+        if !self.strategy_cache.state().contains_key(&id) {
+            return Err(Status::internal("Failed to instantiate strategy"));
+        }
 
         Ok(Response::new(
             candlerunner_api::InstantiateStrategyResponse {
-                instance_id: instance_def.id().to_string(), // kludge
+                instance_id: id.to_string(),
             },
         ))
     }
