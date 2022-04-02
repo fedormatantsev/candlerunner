@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -77,6 +78,8 @@ impl ParamDefinition {
 pub struct StrategyInstanceDefinition {
     strategy_name: String,
     params: HashMap<String, ParamValue>,
+    time_from: DateTime<Utc>,
+    time_to: Option<DateTime<Utc>>,
 }
 
 static mut STRATEGY_INSTANCE_NS: Option<Uuid> = None;
@@ -89,10 +92,17 @@ fn get_strategy_instance_ns() -> &'static Uuid {
 }
 
 impl StrategyInstanceDefinition {
-    pub fn new<N: ToString>(strategy_name: N, params: HashMap<String, ParamValue>) -> Self {
+    pub fn new<N: ToString>(
+        strategy_name: N,
+        params: HashMap<String, ParamValue>,
+        time_from: DateTime<Utc>,
+        time_to: Option<DateTime<Utc>>,
+    ) -> Self {
         Self {
             strategy_name: strategy_name.to_string(),
             params,
+            time_from,
+            time_to,
         }
     }
 
@@ -143,6 +153,17 @@ impl StrategyInstanceDefinition {
             }
         }
 
+        bytes.extend_from_slice(b"Time from:");
+        bytes.extend_from_slice(&self.time_from.timestamp().to_le_bytes());
+        bytes.push(0);
+
+        bytes.extend_from_slice(b"Time to:");
+        match self.time_to {
+            Some(dt) => bytes.extend_from_slice(&dt.timestamp().to_le_bytes()),
+            None => bytes.extend_from_slice(b"NOW"),
+        }
+        bytes.push(0);
+
         Uuid::new_v5(get_strategy_instance_ns(), &bytes)
     }
 
@@ -152,6 +173,14 @@ impl StrategyInstanceDefinition {
 
     pub fn params(&self) -> &HashMap<String, ParamValue> {
         &self.params
+    }
+
+    pub fn time_from(&self) -> DateTime<Utc> {
+        self.time_from
+    }
+
+    pub fn time_to(&self) -> Option<DateTime<Utc>> {
+        self.time_to
     }
 }
 
@@ -187,7 +216,15 @@ impl StrategyDefinition {
     }
 }
 
-pub trait Strategy: Send + Sync + 'static {}
+pub struct InstrumentDataRequirement {
+    pub figi: Figi,
+    pub time_from: DateTime<Utc>,
+    pub time_to: Option<DateTime<Utc>>,
+}
+
+pub trait Strategy: Send + Sync + 'static {
+    fn data_requirements(&self) -> &[InstrumentDataRequirement];
+}
 
 #[derive(Error, Debug)]
 pub enum CreateStrategyError {
@@ -209,5 +246,7 @@ pub trait StrategyFactory: Sync + Send + 'static {
     fn create(
         &self,
         params: &HashMap<String, ParamValue>,
+        time_from: DateTime<Utc>,
+        time_to: Option<DateTime<Utc>>,
     ) -> Result<Arc<dyn Strategy>, CreateStrategyError>;
 }
