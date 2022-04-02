@@ -1,23 +1,39 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::prelude::*;
+
 use crate::models::instruments::Figi;
 use crate::models::strategy::{
-    CreateStrategyError, ParamDefinition, ParamType, ParamValue, Strategy, StrategyDefinition,
-    StrategyFactory,
+    CreateStrategyError, InstrumentDataRequirement, ParamDefinition, ParamType, ParamValue,
+    Strategy, StrategyDefinition, StrategyFactory,
 };
 
 const PARAM_NAME_INSTRUMENT: &str = "Instrument";
 
 pub struct BuyAndHold {
     _figi: Figi,
+    data_requirements: [InstrumentDataRequirement; 1],
 }
 
 impl BuyAndHold {
-    pub fn new(figi: Figi) -> Self { Self { _figi: figi } }
+    pub fn new(figi: Figi, time_from: DateTime<Utc>, time_to: Option<DateTime<Utc>>) -> Self {
+        Self {
+            _figi: figi.clone(),
+            data_requirements: [InstrumentDataRequirement {
+                figi,
+                time_from,
+                time_to,
+            }],
+        }
+    }
 }
 
-impl Strategy for BuyAndHold {}
+impl Strategy for BuyAndHold {
+    fn data_requirements(&self) -> &[InstrumentDataRequirement] {
+        &self.data_requirements
+    }
+}
 
 pub struct BuyAndHoldFactory {
     definition: StrategyDefinition,
@@ -52,6 +68,8 @@ impl StrategyFactory for BuyAndHoldFactory {
     fn create(
         &self,
         params: &HashMap<String, ParamValue>,
+        time_from: DateTime<Utc>,
+        time_to: Option<DateTime<Utc>>,
     ) -> Result<Arc<dyn Strategy>, CreateStrategyError> {
         let instrument_param = params
             .get(PARAM_NAME_INSTRUMENT)
@@ -59,9 +77,13 @@ impl StrategyFactory for BuyAndHoldFactory {
 
         let figi = match instrument_param {
             ParamValue::Instrument(figi) => figi.clone(),
-            _ => return Err(CreateStrategyError::ParamTypeMismatch(PARAM_NAME_INSTRUMENT.to_string())),
+            _ => {
+                return Err(CreateStrategyError::ParamTypeMismatch(
+                    PARAM_NAME_INSTRUMENT.to_string(),
+                ))
+            }
         };
 
-        Ok(Arc::new(BuyAndHold::new(figi)))
+        Ok(Arc::new(BuyAndHold::new(figi, time_from, time_to)))
     }
 }

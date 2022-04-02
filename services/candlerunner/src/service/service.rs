@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::prelude::*;
 use component_store::{ComponentName, ComponentStore};
 use thiserror::Error;
 use tonic::{Request, Response, Status};
@@ -47,7 +48,25 @@ impl TryFrom<candlerunner_api::StrategyInstanceDefinition> for StrategyInstanceD
             params.insert(proto_param.param_name, value);
         }
 
-        Ok(StrategyInstanceDefinition::new(proto.strategy_name, params))
+        let time_from = match proto.time_from {
+            Some(timestamp) => Utc.timestamp(timestamp.seconds, timestamp.nanos as u32),
+            None => {
+                return Err(Status::invalid_argument(
+                    "StrategyInstanceDefinition missing required `time_from` field",
+                ))
+            }
+        };
+
+        let time_to = proto
+            .time_to
+            .map(|timestamp| Utc.timestamp(timestamp.seconds, timestamp.nanos as u32));
+
+        Ok(StrategyInstanceDefinition::new(
+            proto.strategy_name,
+            params,
+            time_from,
+            time_to,
+        ))
     }
 }
 

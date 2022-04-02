@@ -134,6 +134,7 @@ name = "candlerunner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "component_store",
  "futures",
@@ -171,6 +172,7 @@ dependencies = [
  "libc",
  "num-integer",
  "num-traits",
+ "serde",
  "time",
  "winapi",
 ]
