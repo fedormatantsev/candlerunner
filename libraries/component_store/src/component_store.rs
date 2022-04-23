@@ -357,10 +357,10 @@ mod tests {
         let config = Box::new(TestConfigProvider::default());
 
         let component_store = ComponentStore::builder()
-            .register::<TestComponentA>()
-            .register::<TestComponentB>()
-            .register::<TestComponentC>()
-            .register::<TestComponentD>()
+            .register::<TestComponentA>()?
+            .register::<TestComponentB>()?
+            .register::<TestComponentC>()?
+            .register::<TestComponentD>()?
             .build(config)
             .await?;
 

@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
     let component_store = ComponentStore::builder()
         .register::<components::InstrumentCache>()?
         .register::<components::InstrumentSync>()?
+        .register::<components::MarketDataSync>()?
         .register::<components::Mongo>()?
         .register::<components::StrategyCache>()?
         .register::<components::StrategyRegistry>()?

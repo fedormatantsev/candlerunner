@@ -1,14 +1,20 @@
+use chrono::prelude::*;
 use futures::stream::StreamExt;
-
+use futures::TryFutureExt;
 use mongodb::bson::{doc, from_document, to_document, Document};
-use mongodb::options::UpdateOptions;
+use mongodb::options::{
+    CreateCollectionOptions, TimeseriesGranularity, TimeseriesOptions, UpdateOptions,
+};
 use mongodb::{options::ClientOptions, Client, Database};
-
-use component_store::{init_err, prelude::*};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::instruments::Instrument;
+use component_store::{init_err, prelude::*};
+
+use crate::models::instruments::{Figi, Instrument};
+use crate::models::market_data::CandleTimeline;
 use crate::models::strategy::StrategyInstanceDefinition;
+
+const CANDLE_DATA_COLLECTION_NAME: &str = "candle_data";
 
 pub struct Mongo {
     db: Database,
@@ -44,6 +50,21 @@ impl Mongo {
 
         let client = Client::with_options(client_options).map_err(init_err)?;
         let db = client.database("candlerunner");
+
+        db.create_collection(
+            CANDLE_DATA_COLLECTION_NAME,
+            CreateCollectionOptions::builder()
+                .timeseries(
+                    TimeseriesOptions::builder()
+                        .time_field("ts".into())
+                        .meta_field(Some("figi".to_string()))
+                        .granularity(Some(TimeseriesGranularity::Seconds))
+                        .build(),
+                )
+                .build(),
+        )
+        .map_err(init_err)
+        .await?;
 
         Ok(Self { db })
     }
@@ -156,5 +177,68 @@ impl Mongo {
         return self
             .read_items::<StrategyInstanceDefinition>("strategy_instances")
             .await;
+    }
+
+    pub async fn write_candles(&self, figi: &Figi, candles: CandleTimeline) -> anyhow::Result<()> {
+        let collection = self.db.collection::<Document>("candle_data");
+
+        for (ts, candle) in candles {
+            let candle = to_document(&candle)?;
+            let ts = mongodb::bson::DateTime::from_chrono(ts);
+
+            collection
+                .update_one(
+                    doc! {},
+                    doc! {
+                        "$set": {
+                            "figi": &figi.0,
+                            "ts": ts,
+                            "candle": candle
+                        }
+                    },
+                    UpdateOptions::builder().upsert(true).build(),
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn set_candle_data_availability(
+        &self,
+        figi: &Figi,
+        date: Date<Utc>,
+    ) -> anyhow::Result<()> {
+        let collection = self.db.collection::<Document>("candle_data_availability");
+        let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
+
+        collection
+            .update_one(
+                doc! {"figi": &figi.0, "ts": ts},
+                doc! { "$set": { "available": true }},
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_candle_data_availability(
+        &self,
+        figi: &Figi,
+        date: Date<Utc>,
+    ) -> anyhow::Result<bool> {
+        let collection = self.db.collection::<Document>("candle_data_availability");
+        let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
+
+        let res = collection
+            .find_one(doc! {"figi": &figi.0, "ts": ts}, None)
+            .await?;
+
+        let available = res
+            .and_then(|elem| elem.get("available").cloned())
+            .map(|available| available.as_bool().unwrap_or(false));
+
+        Ok(available.unwrap_or(false))
     }
 }
