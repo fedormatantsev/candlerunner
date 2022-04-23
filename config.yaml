@@ -21,3 +21,4 @@ strategy-cache:
 
 market-data-sync:
   update_period: 10
+  max_chunks_per_instrument: 10

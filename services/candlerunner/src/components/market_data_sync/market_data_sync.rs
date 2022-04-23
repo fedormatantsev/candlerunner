@@ -12,6 +12,7 @@ pub struct MarketDataSyncPeriodic {
     tinkoff_client: Arc<components::TinkoffClient>,
     mongo: Arc<components::Mongo>,
     strategy_cache: Arc<components::StrategyCache>,
+    max_chunks_per_instrument: usize,
 }
 
 impl ComponentName for MarketDataSyncPeriodic {
@@ -25,17 +26,20 @@ impl Periodic for MarketDataSyncPeriodic {
 
     fn init(
         resolver: ComponentResolver,
-        _: Box<dyn ConfigProvider>,
+        config: Box<dyn ConfigProvider>,
     ) -> periodic_component::PeriodicCreateFuture<(Self, Self::State)> {
         Box::pin(async move {
             let tinkoff_client = resolver.resolve::<components::TinkoffClient>().await?;
             let mongo = resolver.resolve::<components::Mongo>().await?;
             let strategy_cache = resolver.resolve::<components::StrategyCache>().await?;
 
+            let max_chunks_per_instrument = config.get_u64("max_chunks_per_instrument")? as usize;
+
             let periodic = Self {
                 tinkoff_client,
                 mongo,
                 strategy_cache,
+                max_chunks_per_instrument,
             };
 
             Ok((periodic, ()))
@@ -75,15 +79,25 @@ impl Periodic for MarketDataSyncPeriodic {
                             days
                         });
 
+                let mut chunks_fetched = 0;
+
                 for date in days {
+                    if chunks_fetched > self.max_chunks_per_instrument {
+                        break;
+                    }
+
                     let fetch_result = self.fetch_candle_data(&figi, date).await;
+
                     if let Err(err) = fetch_result {
                         println!(
                             "Failed to fetch candles data for {}: {}",
                             figi.0,
                             err.to_string(),
                         );
+                        continue;
                     }
+
+                    chunks_fetched += 1;
                 }
             }
 
