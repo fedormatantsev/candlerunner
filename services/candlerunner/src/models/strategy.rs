@@ -7,6 +7,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::models::instruments::Figi;
+use crate::models::market_data::{Candle, CandleResolution};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ParamType {
@@ -74,12 +75,13 @@ impl ParamDefinition {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct StrategyInstanceDefinition {
     strategy_name: String,
     params: HashMap<String, ParamValue>,
     time_from: DateTime<Utc>,
     time_to: Option<DateTime<Utc>>,
+    resolution: CandleResolution,
 }
 
 static mut STRATEGY_INSTANCE_NS: Option<Uuid> = None;
@@ -97,12 +99,14 @@ impl StrategyInstanceDefinition {
         params: HashMap<String, ParamValue>,
         time_from: DateTime<Utc>,
         time_to: Option<DateTime<Utc>>,
+        resolution: CandleResolution,
     ) -> Self {
         Self {
             strategy_name: strategy_name.to_string(),
             params,
             time_from,
             time_to,
+            resolution,
         }
     }
 
@@ -164,6 +168,14 @@ impl StrategyInstanceDefinition {
         }
         bytes.push(0);
 
+        bytes.extend_from_slice(b"Resolution:");
+        match self.resolution {
+            CandleResolution::OneMinute => bytes.extend_from_slice(b"OneMinute"),
+            CandleResolution::OneHour => bytes.extend_from_slice(b"OneHour"),
+            CandleResolution::OneDay => bytes.extend_from_slice(b"OneDay"),
+        }
+        bytes.push(0);
+
         Uuid::new_v5(get_strategy_instance_ns(), &bytes)
     }
 
@@ -181,6 +193,10 @@ impl StrategyInstanceDefinition {
 
     pub fn time_to(&self) -> Option<DateTime<Utc>> {
         self.time_to
+    }
+
+    pub fn resolution(&self) -> CandleResolution {
+        self.resolution
     }
 }
 
@@ -216,14 +232,52 @@ impl StrategyDefinition {
     }
 }
 
-pub struct InstrumentDataRequirement {
-    pub figi: Figi,
-    pub time_from: DateTime<Utc>,
-    pub time_to: Option<DateTime<Utc>>,
+#[derive(Error, Debug)]
+pub enum StrategyExecutionError {
+    #[error("Failed to execute strategy; retry later")]
+    ExecutionFailure,
+
+    #[error("Failed to execute strategy")]
+    NonFixableFailure,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub enum StrategyExecutionStatus {
+    Running,
+    Finished,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StrategyExecutionContext {
+    output: f64,
+    meta: bson::Document,
+}
+
+impl StrategyExecutionContext {
+    pub fn new(output: f64, meta: bson::Document) -> Self {
+        Self { output, meta }
+    }
+
+    /// Get the strategy execution context's output.
+    pub fn output(&self) -> f64 {
+        self.output
+    }
+}
+
+pub enum StrategyExecutionOutput {
+    Unavailable,
+    Available(StrategyExecutionContext),
 }
 
 pub trait Strategy: Send + Sync + 'static {
-    fn data_requirements(&self) -> &[InstrumentDataRequirement];
+    fn data_requirements(&self) -> &[Figi];
+    fn execute(
+        &self,
+        ts: DateTime<Utc>,
+        candles: HashMap<Figi, Candle>,
+        prev_context: Option<StrategyExecutionContext>,
+    ) -> Result<StrategyExecutionOutput, StrategyExecutionError>;
 }
 
 #[derive(Error, Debug)]
@@ -246,7 +300,5 @@ pub trait StrategyFactory: Sync + Send + 'static {
     fn create(
         &self,
         params: &HashMap<String, ParamValue>,
-        time_from: DateTime<Utc>,
-        time_to: Option<DateTime<Utc>>,
     ) -> Result<Arc<dyn Strategy>, CreateStrategyError>;
 }

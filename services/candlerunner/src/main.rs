@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .register::<components::Mongo>()?
         .register::<components::StrategyCache>()?
         .register::<components::StrategyRegistry>()?
+        .register::<components::StrategyRunner>()?
         .register::<components::TinkoffClient>()?
         .build(config)
         .await?;

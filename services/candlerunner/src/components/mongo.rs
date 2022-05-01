@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
+use bson::{from_bson, to_bson};
 use chrono::prelude::*;
 use futures::stream::StreamExt;
-use futures::TryFutureExt;
+use futures::{TryFutureExt, TryStreamExt};
 use mongodb::bson::{doc, from_document, to_document, Document};
 use mongodb::options::{
     CreateCollectionOptions, TimeseriesGranularity, TimeseriesOptions, UpdateOptions,
@@ -11,10 +14,13 @@ use serde::{de::DeserializeOwned, Serialize};
 use component_store::{init_err, prelude::*};
 
 use crate::models::instruments::{Figi, Instrument};
-use crate::models::market_data::CandleTimeline;
-use crate::models::strategy::StrategyInstanceDefinition;
+use crate::models::market_data::{Candle, CandleTimeline, DataAvailability};
+use crate::models::strategy::{
+    StrategyExecutionContext, StrategyExecutionStatus, StrategyInstanceDefinition,
+};
 
 const CANDLE_DATA_COLLECTION_NAME: &str = "candle_data";
+const STRATEGY_EXECUTION_COLLECTION_NAME: &str = "strategy_execution";
 
 pub struct Mongo {
     db: Database,
@@ -39,6 +45,17 @@ impl ComponentName for Mongo {
 
 impl Component for Mongo {}
 
+fn get_datetime(doc: &Document, field_name: &str) -> anyhow::Result<DateTime<Utc>> {
+    let ts = doc
+        .get(field_name)
+        .ok_or_else(|| anyhow::anyhow!("Field `{}` is missing", field_name))?;
+
+    Ok(ts
+        .as_datetime()
+        .ok_or_else(|| anyhow::anyhow!("Field `{}` is not a datetime", field_name))?
+        .to_chrono())
+}
+
 impl Mongo {
     async fn new(
         _: component_store::ComponentResolver,
@@ -51,20 +68,41 @@ impl Mongo {
         let client = Client::with_options(client_options).map_err(init_err)?;
         let db = client.database("candlerunner");
 
-        db.create_collection(
-            CANDLE_DATA_COLLECTION_NAME,
-            CreateCollectionOptions::builder()
-                .timeseries(
-                    TimeseriesOptions::builder()
-                        .time_field("ts".into())
-                        .meta_field(Some("figi".to_string()))
-                        .granularity(Some(TimeseriesGranularity::Seconds))
-                        .build(),
-                )
-                .build(),
-        )
-        .map_err(init_err)
-        .await?;
+        let collections = db.list_collection_names(None).await.map_err(init_err)?;
+
+        if !collections.contains(&CANDLE_DATA_COLLECTION_NAME.to_string()) {
+            db.create_collection(
+                CANDLE_DATA_COLLECTION_NAME,
+                CreateCollectionOptions::builder()
+                    .timeseries(
+                        TimeseriesOptions::builder()
+                            .time_field("ts".into())
+                            .meta_field(Some("figi".to_string()))
+                            .granularity(Some(TimeseriesGranularity::Seconds))
+                            .build(),
+                    )
+                    .build(),
+            )
+            .map_err(init_err)
+            .await?;
+        }
+
+        if !collections.contains(&STRATEGY_EXECUTION_COLLECTION_NAME.to_string()) {
+            db.create_collection(
+                STRATEGY_EXECUTION_COLLECTION_NAME,
+                CreateCollectionOptions::builder()
+                    .timeseries(
+                        TimeseriesOptions::builder()
+                            .time_field("ts".into())
+                            .meta_field(Some("strategy_id".to_string()))
+                            .granularity(Some(TimeseriesGranularity::Seconds))
+                            .build(),
+                    )
+                    .build(),
+            )
+            .map_err(init_err)
+            .await?;
+        }
 
         Ok(Self { db })
     }
@@ -92,7 +130,7 @@ impl Mongo {
                     doc! {
                         "$set": doc
                     },
-                    Some(UpdateOptions::builder().upsert(true).build()),
+                    UpdateOptions::builder().upsert(true).build(),
                 )
                 .await
             {
@@ -184,19 +222,15 @@ impl Mongo {
 
         for (ts, candle) in candles {
             let candle = to_document(&candle)?;
-            let ts = mongodb::bson::DateTime::from_chrono(ts);
 
             collection
-                .update_one(
-                    doc! {},
+                .insert_one(
                     doc! {
-                        "$set": {
-                            "figi": &figi.0,
-                            "ts": ts,
-                            "candle": candle
-                        }
+                        "ts": ts,
+                        "figi": &figi.0,
+                        "candle": candle
                     },
-                    UpdateOptions::builder().upsert(true).build(),
+                    None,
                 )
                 .await?;
         }
@@ -204,18 +238,69 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn set_candle_data_availability(
+    pub async fn read_candles(
+        &self,
+        figi: &Figi,
+        time_from: DateTime<Utc>,
+        time_to: DateTime<Utc>,
+    ) -> anyhow::Result<CandleTimeline> {
+        let collection = self.db.collection::<Document>("candle_data");
+
+        let raw_data: Vec<_> = collection
+            .find(
+                doc! {
+                    "figi": &figi.0,
+                    "$and": [
+                        {
+                            "ts": {
+                                "$gte": time_from
+                            },
+                        },
+                        {
+                            "ts": {
+                                "$lt": time_to
+                            }
+                        }
+                    ]
+                },
+                None,
+            )
+            .await?
+            .try_collect()
+            .await?;
+
+        let mut candles = CandleTimeline::default();
+
+        for doc in raw_data {
+            let ts = get_datetime(&doc, "ts")?;
+            let candle_doc = doc
+                .get("candle")
+                .ok_or_else(|| anyhow::anyhow!("`candle` field is missing"))?
+                .as_document()
+                .ok_or_else(|| anyhow::anyhow!("`candle` field is not a document"))?;
+
+            let candle = from_document::<Candle>(candle_doc.clone())?;
+
+            candles.insert(ts, candle);
+        }
+
+        Ok(candles)
+    }
+
+    pub async fn write_candle_data_availability(
         &self,
         figi: &Figi,
         date: Date<Utc>,
+        availability: DataAvailability,
     ) -> anyhow::Result<()> {
         let collection = self.db.collection::<Document>("candle_data_availability");
         let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
+        let availability = to_document(&availability)?;
 
         collection
             .update_one(
                 doc! {"figi": &figi.0, "ts": ts},
-                doc! { "$set": { "available": true }},
+                doc! { "$set": { "availability": availability }},
                 UpdateOptions::builder().upsert(true).build(),
             )
             .await?;
@@ -223,22 +308,160 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn get_candle_data_availability(
+    pub async fn read_candle_data_availability(
         &self,
         figi: &Figi,
-        date: Date<Utc>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<BTreeMap<Date<Utc>, DataAvailability>> {
         let collection = self.db.collection::<Document>("candle_data_availability");
-        let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
-
-        let res = collection
-            .find_one(doc! {"figi": &figi.0, "ts": ts}, None)
+        let raw_data: Vec<_> = collection
+            .find(doc! {"figi": &figi.0}, None)
+            .await?
+            .try_collect()
             .await?;
 
-        let available = res
-            .and_then(|elem| elem.get("available").cloned())
-            .map(|available| available.as_bool().unwrap_or(false));
+        let mut res: BTreeMap<Date<Utc>, DataAvailability> = Default::default();
 
-        Ok(available.unwrap_or(false))
+        for doc in raw_data {
+            let ts = get_datetime(&doc, "ts")?;
+            let availability = doc
+                .get("availability")
+                .ok_or_else(|| anyhow::anyhow!("`availability` field is missing"))?
+                .as_document()
+                .ok_or_else(|| anyhow::anyhow!("`availability` field is not a document"))?;
+
+            let availability = from_document::<DataAvailability>(availability.clone())?;
+            res.insert(ts.date(), availability);
+        }
+
+        println!(
+            "Fetched {} items from `candle_data_availability` collection",
+            res.len()
+        );
+
+        Ok(res)
+    }
+
+    pub async fn read_strategy_execution_contexts(
+        &self,
+        strategy_id: &uuid::Uuid,
+        time_from: DateTime<Utc>,
+        time_to: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<BTreeMap<DateTime<Utc>, StrategyExecutionContext>> {
+        let collection = self
+            .db
+            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
+
+        let filter = match time_to {
+            Some(time_to) => doc! {
+                "strategy_id": strategy_id,
+                "$and": [
+                    {
+                        "ts": {
+                            "$gte": time_from
+                        }
+                    },
+                    {
+                        "ts": {
+                            "$lt": time_to
+                        }
+
+                    }
+                ]
+            },
+            None => doc! {
+                "strategy_id": strategy_id,
+                "ts": {
+                    "$gte": time_from
+                }
+            },
+        };
+
+        let raw_data: Vec<_> = collection.find(filter, None).await?.try_collect().await?;
+        let mut contexts: BTreeMap<DateTime<Utc>, StrategyExecutionContext> = Default::default();
+
+        for doc in raw_data {
+            let ts = get_datetime(&doc, "ts")?;
+            let ctx_doc = doc
+                .get("context")
+                .ok_or_else(|| anyhow::anyhow!("`context` field is missing from document"))?
+                .as_document()
+                .ok_or_else(|| anyhow::anyhow!("`context` field is not a document"))?;
+
+            let ctx = from_document::<StrategyExecutionContext>(ctx_doc.clone())?;
+
+            contexts.insert(ts, ctx);
+        }
+
+        Ok(contexts)
+    }
+
+    pub async fn write_strategy_execution_contexts(
+        &self,
+        strategy_id: &uuid::Uuid,
+        contexts: Vec<(DateTime<Utc>, StrategyExecutionContext)>,
+    ) -> anyhow::Result<()> {
+        let collection = self
+            .db
+            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
+
+        for (ts, ctx) in contexts {
+            let doc = to_document(&ctx)?;
+
+            collection
+                .insert_one(
+                    doc! {
+                        "ts": ts,
+                        "strategy_id": strategy_id,
+                        "context": doc
+                    },
+                    None,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn write_strategy_execution_status(
+        &self,
+        strategy_id: &uuid::Uuid,
+        status: &StrategyExecutionStatus,
+    ) -> anyhow::Result<()> {
+        let collection = self.db.collection::<Document>("strategy_execution_status");
+        let status = to_bson(status)?;
+
+        collection
+            .update_one(
+                doc! { "strategy_id": strategy_id },
+                doc! {"$set": {
+                        "status": status
+                    }
+                },
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn read_strategy_execution_status(
+        &self,
+        strategy_id: &uuid::Uuid,
+    ) -> anyhow::Result<StrategyExecutionStatus> {
+        let collection = self.db.collection::<Document>("strategy_execution_status");
+
+        let doc = collection
+            .find_one(doc! {"strategy_id": strategy_id}, None)
+            .await?;
+
+        let status_doc = doc
+            .ok_or_else(|| {
+                anyhow::anyhow!("Strategy execution status not found for {}", strategy_id)
+            })?
+            .get("status")
+            .ok_or_else(|| anyhow::anyhow!("Field `status` is missing"))?
+            .clone();
+
+        Ok(from_bson::<StrategyExecutionStatus>(status_doc)?)
     }
 }

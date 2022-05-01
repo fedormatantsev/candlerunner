@@ -13,7 +13,20 @@ use crate::generated::candlerunner_api::{
 };
 
 use crate::models::instruments::Figi;
-use crate::models::strategy::{ParamType, ParamValue, StrategyInstanceDefinition};
+use crate::models::market_data::CandleResolution;
+use crate::models::strategy::{
+    ParamType, ParamValue, StrategyExecutionStatus, StrategyInstanceDefinition,
+};
+
+impl From<candlerunner_api::CandleResolution> for CandleResolution {
+    fn from(value: candlerunner_api::CandleResolution) -> CandleResolution {
+        match value {
+            candlerunner_api::CandleResolution::OneMinute => CandleResolution::OneMinute,
+            candlerunner_api::CandleResolution::OneHour => CandleResolution::OneHour,
+            candlerunner_api::CandleResolution::OneDay => CandleResolution::OneDay,
+        }
+    }
+}
 
 impl TryFrom<candlerunner_api::StrategyInstanceDefinition> for StrategyInstanceDefinition {
     type Error = Status;
@@ -61,11 +74,18 @@ impl TryFrom<candlerunner_api::StrategyInstanceDefinition> for StrategyInstanceD
             .time_to
             .map(|timestamp| Utc.timestamp(timestamp.seconds, timestamp.nanos as u32));
 
+        let resolution = candlerunner_api::CandleResolution::from_i32(proto.resolution)
+            .map(CandleResolution::from)
+            .ok_or_else(|| {
+                Status::invalid_argument(format!("Unknown candle resolution: {}", proto.resolution))
+            })?;
+
         Ok(StrategyInstanceDefinition::new(
             proto.strategy_name,
             params,
             time_from,
             time_to,
+            resolution,
         ))
     }
 }
@@ -205,6 +225,13 @@ impl CandlerunnerService for Service {
         self.strategy_registry
             .validate_instance_definition(&instance_def)
             .map_err(|err| Status::internal(err.to_string()))?;
+
+        self.mongo
+            .write_strategy_execution_status(&instance_def.id(), &StrategyExecutionStatus::Running)
+            .await
+            .map_err(|err| {
+                Status::internal(format!("Failed to write strategy instance to db: {}", err))
+            })?;
 
         self.mongo
             .write_strategy_instance(&instance_def)

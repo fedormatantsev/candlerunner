@@ -6,6 +6,7 @@ version = "0.1.0"
 
 [dependencies]
 anyhow               = "1.0"
+bson                 = { version = "2.2.0" }
 chrono               = { version = "0.4", features = ["serde"] }
 clap                 = { version = "3.1", features = ["derive"] }
 component_store      = { path = "../../libraries/component_store" }

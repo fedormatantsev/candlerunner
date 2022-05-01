@@ -4,9 +4,10 @@ use chrono::prelude::*;
 use component_store::prelude::*;
 use periodic_component::{Periodic, PeriodicComponent};
 
-use crate::{components, models::instruments::Figi};
+use crate::components;
+use crate::models::{instruments::Figi, market_data::DataAvailability};
 
-use super::requirements_collector::RequirementsCollector;
+use super::requirements_collector::{Ranges, RequirementsCollector};
 
 pub struct MarketDataSyncPeriodic {
     tinkoff_client: Arc<components::TinkoffClient>,
@@ -54,50 +55,22 @@ impl Periodic for MarketDataSyncPeriodic {
             let strategies = self.strategy_cache.state();
             let mut collector = RequirementsCollector::default();
 
-            for strategy in strategies.values() {
-                strategy
-                    .data_requirements()
-                    .iter()
-                    .for_each(|req| collector.push(req));
+            for (def, strategy) in strategies.values() {
+                strategy.data_requirements().iter().for_each(|figi| {
+                    collector.push(figi.clone(), def.time_from(), def.time_to());
+                });
             }
 
             let data_ranges = collector.finalize();
 
             for (figi, ranges) in data_ranges {
-                let days =
-                    ranges
-                        .into_iter()
-                        .fold(HashSet::<Date<Utc>>::default(), |mut days, range| {
-                            let mut from = range.0.date();
-                            let to = range.1.date().succ();
-
-                            while from < to {
-                                days.insert(from.clone());
-                                from = from.succ();
-                            }
-
-                            days
-                        });
-
-                let mut chunks_fetched = 0;
-
-                for date in days {
-                    if chunks_fetched > self.max_chunks_per_instrument {
-                        break;
-                    }
-
-                    let fetch_result = self.fetch_candle_data(&figi, date).await;
-
-                    if let Err(err) = fetch_result {
-                        println!(
-                            "Failed to fetch candles data for {}: {}",
-                            figi.0,
-                            err.to_string(),
-                        );
-                        continue;
-                    }
-
-                    chunks_fetched += 1;
+                match self.sync_market_data_ranges(&figi, ranges).await {
+                    Ok(_) => (),
+                    Err(err) => println!(
+                        "Failed to retrieve market data for {}: {}",
+                        figi.0,
+                        err.to_string()
+                    ),
                 }
             }
 
@@ -107,19 +80,88 @@ impl Periodic for MarketDataSyncPeriodic {
 }
 
 impl MarketDataSyncPeriodic {
-    async fn fetch_candle_data(&self, figi: &Figi, date: Date<Utc>) -> anyhow::Result<()> {
-        let available = self.mongo.get_candle_data_availability(&figi, date).await?;
-        if available {
-            return Ok(());
-        }
+    async fn sync_candle_data(&self, figi: &Figi, date: Date<Utc>) -> anyhow::Result<()> {
+        let request_ts = date.and_hms(0, 0, 0);
 
         let candles = self
             .tinkoff_client
-            .get_candles(&figi, date.and_hms(0, 0, 0), date.succ().and_hms(0, 0, 0))
+            .get_candles(&figi, request_ts, date.succ().and_hms(0, 0, 0))
             .await?;
 
+        let mut cursor: Option<DateTime<Utc>> = None;
+
+        let mut one_minute_candles = 0usize;
+        let mut one_hour_candles = 0usize;
+        let mut one_day_candles = 0usize;
+
+        for (ts, _) in candles.iter() {
+            if let Some(cursor) = cursor {
+                if cursor.hour() < ts.hour() {
+                    one_hour_candles += 1;
+                    one_minute_candles += 1;
+                } else if cursor.minute() < ts.minute() {
+                    one_minute_candles += 1;
+                }
+            } else {
+                one_day_candles += 1;
+            }
+
+            cursor = Some(*ts);
+        }
+
         self.mongo.write_candles(&figi, candles).await?;
-        self.mongo.set_candle_data_availability(&figi, date).await?;
+        self.mongo
+            .write_candle_data_availability(
+                &figi,
+                date,
+                DataAvailability::new(one_minute_candles, one_hour_candles, one_day_candles),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn sync_market_data_ranges(&self, figi: &Figi, ranges: Ranges) -> anyhow::Result<()> {
+        let availability = self.mongo.read_candle_data_availability(&figi).await?;
+
+        let days = ranges
+            .into_iter()
+            .fold(HashSet::<Date<Utc>>::default(), |mut days, range| {
+                let mut from = range.0.date();
+                let to = range.1.date().succ();
+
+                while from < to {
+                    if let None = availability.get(&from) {
+                        days.insert(from);
+                    }
+
+                    from = from.succ();
+                }
+
+                days
+            });
+
+        let mut chunks_fetched = 0;
+
+        for date in days {
+            if chunks_fetched > self.max_chunks_per_instrument {
+                break;
+            }
+
+            let fetch_result = self.sync_candle_data(&figi, date).await;
+
+            if let Err(err) = fetch_result {
+                println!(
+                    "Failed to fetch candles data for {} at {}: {}",
+                    figi.0,
+                    date,
+                    err.to_string(),
+                );
+                continue;
+            }
+
+            chunks_fetched += 1;
+        }
 
         Ok(())
     }

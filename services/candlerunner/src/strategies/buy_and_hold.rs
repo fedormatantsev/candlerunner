@@ -4,34 +4,43 @@ use std::sync::Arc;
 use chrono::prelude::*;
 
 use crate::models::instruments::Figi;
+use crate::models::market_data::Candle;
 use crate::models::strategy::{
-    CreateStrategyError, InstrumentDataRequirement, ParamDefinition, ParamType, ParamValue,
-    Strategy, StrategyDefinition, StrategyFactory,
+    CreateStrategyError, ParamDefinition, ParamType, ParamValue, Strategy, StrategyDefinition,
+    StrategyExecutionContext, StrategyExecutionError, StrategyExecutionOutput, StrategyFactory,
 };
 
 const PARAM_NAME_INSTRUMENT: &str = "Instrument";
 
 pub struct BuyAndHold {
     _figi: Figi,
-    data_requirements: [InstrumentDataRequirement; 1],
+    data_requirements: [Figi; 1],
 }
 
 impl BuyAndHold {
-    pub fn new(figi: Figi, time_from: DateTime<Utc>, time_to: Option<DateTime<Utc>>) -> Self {
+    pub fn new(figi: Figi) -> Self {
         Self {
             _figi: figi.clone(),
-            data_requirements: [InstrumentDataRequirement {
-                figi,
-                time_from,
-                time_to,
-            }],
+            data_requirements: [figi],
         }
     }
 }
 
 impl Strategy for BuyAndHold {
-    fn data_requirements(&self) -> &[InstrumentDataRequirement] {
+    fn data_requirements(&self) -> &[Figi] {
         &self.data_requirements
+    }
+
+    fn execute(
+        &self,
+        ts: DateTime<Utc>,
+        candles: HashMap<Figi, Candle>,
+        _: Option<StrategyExecutionContext>,
+    ) -> Result<StrategyExecutionOutput, StrategyExecutionError> {
+        println!("Executing BuyAndHold: {}, {:?}", ts, candles);
+        Ok(StrategyExecutionOutput::Available(
+            StrategyExecutionContext::new(1.0f64, bson::Document::default()),
+        ))
     }
 }
 
@@ -68,8 +77,6 @@ impl StrategyFactory for BuyAndHoldFactory {
     fn create(
         &self,
         params: &HashMap<String, ParamValue>,
-        time_from: DateTime<Utc>,
-        time_to: Option<DateTime<Utc>>,
     ) -> Result<Arc<dyn Strategy>, CreateStrategyError> {
         let instrument_param = params
             .get(PARAM_NAME_INSTRUMENT)
@@ -84,6 +91,6 @@ impl StrategyFactory for BuyAndHoldFactory {
             }
         };
 
-        Ok(Arc::new(BuyAndHold::new(figi, time_from, time_to)))
+        Ok(Arc::new(BuyAndHold::new(figi)))
     }
 }
