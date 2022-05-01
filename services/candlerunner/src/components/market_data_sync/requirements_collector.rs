@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use chrono::prelude::*;
 
 use crate::models::instruments::Figi;
-use crate::models::strategy::InstrumentDataRequirement;
 
-type Ranges = Vec<(DateTime<Utc>, DateTime<Utc>)>;
+pub type Ranges = Vec<(DateTime<Utc>, DateTime<Utc>)>;
 
 #[derive(Default)]
 pub struct RequirementsCollector {
@@ -39,10 +38,10 @@ fn merge_ranges(mut input: Ranges) -> Ranges {
 }
 
 impl RequirementsCollector {
-    pub fn push(&mut self, req: &InstrumentDataRequirement) {
-        let range = (req.time_from, req.time_to.unwrap_or_else(|| Utc::now()));
+    pub fn push(&mut self, figi: Figi, time_from: DateTime<Utc>, time_to: Option<DateTime<Utc>>) {
+        let range = (time_from, time_to.unwrap_or_else(|| Utc::now()));
 
-        let ranges = self.instruments.entry(req.figi.clone()).or_default();
+        let ranges = self.instruments.entry(figi).or_default();
         ranges.push(range);
     }
 

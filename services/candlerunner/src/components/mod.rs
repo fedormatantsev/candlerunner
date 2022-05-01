@@ -5,6 +5,7 @@ mod mongo;
 mod strategy_cache;
 mod strategy_registry;
 mod tinkoff_client;
+mod strategy_runner;
 
 pub use instrument_cache::InstrumentCache;
 pub use instrument_sync::InstrumentSync;
@@ -13,3 +14,4 @@ pub use mongo::Mongo;
 pub use strategy_cache::StrategyCache;
 pub use strategy_registry::StrategyRegistry;
 pub use tinkoff_client::TinkoffClient;
+pub use strategy_runner::StrategyRunner;

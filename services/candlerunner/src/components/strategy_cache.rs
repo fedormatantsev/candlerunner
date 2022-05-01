@@ -21,7 +21,7 @@ impl ComponentName for StrategyCachePeriodic {
 }
 
 impl Periodic for StrategyCachePeriodic {
-    type State = HashMap<Uuid, Arc<dyn Strategy>>;
+    type State = HashMap<Uuid, (StrategyInstanceDefinition, Arc<dyn Strategy>)>;
 
     fn init(
         resolver: ComponentResolver,
@@ -60,9 +60,9 @@ impl StrategyCachePeriodic {
 
         let mut instantiate =
             |id: Uuid, def: StrategyInstanceDefinition, state: &mut <Self as Periodic>::State| {
-                match self.registry.instantiate_strategy(def) {
+                match self.registry.instantiate_strategy(def.clone()) {
                     Ok(instance) => {
-                        state.insert(id, instance);
+                        state.insert(id, (def, instance));
                         inserted += 1;
                     }
                     Err(err) => {
@@ -78,8 +78,8 @@ impl StrategyCachePeriodic {
                     let id = def.id();
 
                     match prev_state.get(&id) {
-                        Some(instance) => {
-                            state.insert(id, instance.clone());
+                        Some(item) => {
+                            state.insert(id, item.clone());
                             return state;
                         }
                         None => {

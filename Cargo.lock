@@ -134,6 +134,7 @@ name = "candlerunner"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bson",
  "chrono",
  "clap",
  "component_store",

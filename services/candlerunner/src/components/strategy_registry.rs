@@ -132,11 +132,7 @@ impl StrategyRegistry {
                 )
             })?;
 
-        factory.create(
-            instance_definition.params(),
-            instance_definition.time_from(),
-            instance_definition.time_to(),
-        )
+        factory.create(instance_definition.params())
     }
 
     async fn new(
