@@ -48,7 +48,6 @@ fn generate_proto_package<P: AsRef<std::path::Path>>(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_proto_package("../../proto/vendor/tinkoff_invest_api", Target::Client)?;
-    generate_proto_package("../../proto/candlerunner", Target::Server)?;
 
     Ok(())
 }

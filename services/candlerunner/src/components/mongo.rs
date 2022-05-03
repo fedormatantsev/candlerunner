@@ -160,7 +160,6 @@ impl Mongo {
                     Ok(doc) => {
                         let res = from_document::<T>(doc).map(|deserialized| {
                             state.push(deserialized);
-                            ()
                         });
 
                         if let Err(err) = res {
