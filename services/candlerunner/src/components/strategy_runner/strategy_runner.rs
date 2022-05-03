@@ -113,10 +113,24 @@ impl StrategyRunnerPeriodic {
                     Ok(status) => status,
                     Err(err) => {
                         println!(
-                            "Failed to read strategy execution status for strategy {}: {}",
+                            "Failed to read execution status for strategy {}: {}",
                             strategy_id,
                             err.to_string()
                         );
+                        if let Err(err) = self
+                            .mongo
+                            .write_strategy_execution_status(
+                                strategy_id,
+                                &StrategyExecutionStatus::Running,
+                            )
+                            .await
+                        {
+                            println!(
+                                "Failed to update execution status for strategy {}: {}",
+                                strategy_id,
+                                err.to_string()
+                            );
+                        }
                         StrategyExecutionStatus::Running
                     }
                 };

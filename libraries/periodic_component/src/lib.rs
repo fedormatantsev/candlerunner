@@ -18,10 +18,10 @@ pub trait Periodic: ComponentName + Send + Sync + Sized + 'static {
         config: Box<dyn ConfigProvider>,
     ) -> PeriodicCreateFuture<(Self, Self::State)>;
 
-    fn step<'periodic>(
-        &'periodic mut self,
+    fn step(
+        &mut self,
         state: Arc<Self::State>,
-    ) -> PeriodicFuture<'periodic, Self::State>;
+    ) -> PeriodicFuture<'_, Self::State>;
 }
 
 struct StateHolder<S> {

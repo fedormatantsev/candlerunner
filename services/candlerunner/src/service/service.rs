@@ -1,258 +1,211 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
-use chrono::prelude::*;
-use component_store::{ComponentName, ComponentStore};
-use thiserror::Error;
-use tonic::{Request, Response, Status};
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use warp::Filter;
 
-use crate::components;
-use crate::generated::candlerunner_api::{
-    self,
-    candlerunner_service_server::{CandlerunnerService, CandlerunnerServiceServer},
+use component_store::ComponentStore;
+
+use crate::{
+    components,
+    models::strategy::{CreateStrategyError, StrategyInstanceDefinition},
 };
 
-use crate::models::instruments::Figi;
-use crate::models::market_data::CandleResolution;
-use crate::models::strategy::{
-    ParamType, ParamValue, StrategyExecutionStatus, StrategyInstanceDefinition,
-};
+#[derive(Clone)]
+struct ListInstruments {
+    instrument_cache: Arc<components::InstrumentCache>,
+}
 
-impl From<candlerunner_api::CandleResolution> for CandleResolution {
-    fn from(value: candlerunner_api::CandleResolution) -> CandleResolution {
-        match value {
-            candlerunner_api::CandleResolution::OneMinute => CandleResolution::OneMinute,
-            candlerunner_api::CandleResolution::OneHour => CandleResolution::OneHour,
-            candlerunner_api::CandleResolution::OneDay => CandleResolution::OneDay,
+impl ListInstruments {
+    pub fn new(component_store: &ComponentStore) -> anyhow::Result<Self> {
+        let instrument_cache = component_store
+            .resolve::<components::InstrumentCache>()
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `InstrumentsCache`"))?;
+
+        Ok(Self { instrument_cache })
+    }
+
+    pub fn view(&self) -> warp::reply::Json {
+        let instruments_cache = self.instrument_cache.state();
+        let instruments: Vec<_> = instruments_cache.values().collect();
+
+        warp::reply::json(&instruments)
+    }
+}
+
+#[derive(Clone)]
+struct ListStrategies {
+    strategy_registry: Arc<components::StrategyRegistry>,
+}
+
+impl ListStrategies {
+    pub fn new(component_store: &ComponentStore) -> anyhow::Result<Self> {
+        let strategy_registry = component_store
+            .resolve::<components::StrategyRegistry>()
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `StrategyRegistry`"))?;
+
+        Ok(Self { strategy_registry })
+    }
+
+    pub fn view(&self) -> warp::reply::Json {
+        let definitions: Vec<_> = self.strategy_registry.definitions().collect();
+
+        warp::reply::json(&definitions)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BadRequest {
+    code: String,
+    message: String,
+}
+
+impl warp::reject::Reject for BadRequest {}
+
+impl From<CreateStrategyError> for BadRequest {
+    fn from(err: CreateStrategyError) -> Self {
+        match err {
+            CreateStrategyError::StrategyNotFound(msg) => BadRequest {
+                code: "STRATEGY_NOT_FOUND".to_owned(),
+                message: msg,
+            },
+            CreateStrategyError::ParamMissing(msg) => BadRequest {
+                code: "PARAM_MISSING".to_owned(),
+                message: msg,
+            },
+            CreateStrategyError::InvalidParam(msg) => BadRequest {
+                code: "INVALID_PARAM".to_owned(),
+                message: msg,
+            },
+            CreateStrategyError::ParamTypeMismatch(msg) => BadRequest {
+                code: "PARAM_TYPE_MISMATCH".to_owned(),
+                message: msg,
+            },
+            CreateStrategyError::FailedToInstantiateStrategy(msg) => BadRequest {
+                code: "FAILED_TO_INSTANTIATE".to_owned(),
+                message: msg,
+            },
         }
     }
 }
 
-impl TryFrom<candlerunner_api::StrategyInstanceDefinition> for StrategyInstanceDefinition {
-    type Error = Status;
+#[derive(Debug)]
+struct InternalError {}
+impl warp::reject::Reject for InternalError {}
 
-    fn try_from(proto: candlerunner_api::StrategyInstanceDefinition) -> Result<Self, Self::Error> {
-        let mut params: HashMap<String, ParamValue> = Default::default();
-
-        for proto_param in proto.params {
-            if proto_param.param_name.is_empty() {
-                return Err(Status::invalid_argument("Param name is not specified"));
-            }
-
-            let proto_value = proto_param
-                .param_value
-                .and_then(|v| v.value)
-                .ok_or_else(|| {
-                    Status::invalid_argument(format!(
-                        "Parameter `{}` missing value field",
-                        &proto_param.param_name
-                    ))
-                })?;
-
-            let value = match proto_value {
-                candlerunner_api::param_value::Value::InstrumentVal(figi) => {
-                    ParamValue::Instrument(Figi(figi))
-                }
-                candlerunner_api::param_value::Value::IntegerVal(i) => ParamValue::Integer(i),
-                candlerunner_api::param_value::Value::FloatVal(f) => ParamValue::Float(f),
-                candlerunner_api::param_value::Value::BooleanVal(b) => ParamValue::Boolean(b),
-            };
-
-            params.insert(proto_param.param_name, value);
-        }
-
-        let time_from = match proto.time_from {
-            Some(timestamp) => Utc.timestamp(timestamp.seconds, timestamp.nanos as u32),
-            None => {
-                return Err(Status::invalid_argument(
-                    "StrategyInstanceDefinition missing required `time_from` field",
-                ))
-            }
-        };
-
-        let time_to = proto
-            .time_to
-            .map(|timestamp| Utc.timestamp(timestamp.seconds, timestamp.nanos as u32));
-
-        let resolution = candlerunner_api::CandleResolution::from_i32(proto.resolution)
-            .map(CandleResolution::from)
-            .ok_or_else(|| {
-                Status::invalid_argument(format!("Unknown candle resolution: {}", proto.resolution))
-            })?;
-
-        Ok(StrategyInstanceDefinition::new(
-            proto.strategy_name,
-            params,
-            time_from,
-            time_to,
-            resolution,
-        ))
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum ServiceError {
-    #[error("Failed to resolve component {0}")]
-    FailedToResolveComponent(String),
-}
-
-pub struct Service {
-    instruments_cache: Arc<components::InstrumentCache>,
+#[derive(Clone)]
+struct InstantiateStrategy {
     strategy_registry: Arc<components::StrategyRegistry>,
     strategy_cache: Arc<components::StrategyCache>,
     mongo: Arc<components::Mongo>,
 }
 
-impl Service {
-    pub fn new(
-        component_store: &ComponentStore,
-    ) -> Result<CandlerunnerServiceServer<Self>, ServiceError> {
-        let instruments_cache = component_store
-            .resolve::<components::InstrumentCache>()
-            .ok_or_else(|| {
-                ServiceError::FailedToResolveComponent(
-                    components::InstrumentCache::component_name().to_string(),
-                )
-            })?;
-
+impl InstantiateStrategy {
+    pub fn new(component_store: &ComponentStore) -> anyhow::Result<Self> {
         let strategy_registry = component_store
             .resolve::<components::StrategyRegistry>()
-            .ok_or_else(|| {
-                ServiceError::FailedToResolveComponent(
-                    components::StrategyRegistry::component_name().to_string(),
-                )
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `StrategyRegistry`"))?;
 
         let strategy_cache = component_store
             .resolve::<components::StrategyCache>()
-            .ok_or_else(|| {
-                ServiceError::FailedToResolveComponent(
-                    components::StrategyCache::component_name().to_string(),
-                )
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `StrategyCache`"))?;
 
         let mongo = component_store
             .resolve::<components::Mongo>()
-            .ok_or_else(|| {
-                ServiceError::FailedToResolveComponent(
-                    components::Mongo::component_name().to_string(),
-                )
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `Mongo`"))?;
 
-        Ok(CandlerunnerServiceServer::new(Self {
-            instruments_cache,
+        Ok(Self {
             strategy_registry,
             strategy_cache,
             mongo,
-        }))
+        })
+    }
+
+    pub async fn view(
+        self,
+        definition: StrategyInstanceDefinition,
+    ) -> Result<impl warp::Reply, warp::Rejection> {
+        self.strategy_registry
+            .validate_instance_definition(&definition)
+            .map_err(|err| warp::reject::custom(BadRequest::from(err)))?;
+
+        if let Err(err) = self.mongo.write_strategy_instance(&definition).await {
+            println!(
+                "Failed to write strategy instance to mongo: {}",
+                err.to_string()
+            );
+            return Err(warp::reject::custom(InternalError {}));
+        }
+
+        self.strategy_cache
+            .force_update(Some(Duration::from_millis(500)))
+            .await;
+
+        Ok(warp::reply::reply())
     }
 }
 
-#[tonic::async_trait]
-impl CandlerunnerService for Service {
-    async fn instruments(
-        &self,
-        _: Request<candlerunner_api::InstrumentsRequest>,
-    ) -> Result<Response<candlerunner_api::InstrumentsResponse>, Status> {
-        let instruments: Vec<_> = self
-            .instruments_cache
-            .state()
-            .values()
-            .cloned()
-            .map(|i| candlerunner_api::Instrument {
-                figi: i.figi.0,
-                ticker: i.ticker.0,
-                display_name: i.display_name,
-            })
+#[derive(Clone)]
+struct ListStrategyInstances {
+    strategy_cache: Arc<components::StrategyCache>,
+}
+
+impl ListStrategyInstances {
+    pub fn new(component_store: &ComponentStore) -> anyhow::Result<Self> {
+        let strategy_cache = component_store
+            .resolve::<components::StrategyCache>()
+            .ok_or_else(|| anyhow::anyhow!("Failed to resolve `StrategyCache`"))?;
+
+        Ok(Self { strategy_cache })
+    }
+
+    pub fn view(&self) -> warp::reply::Json {
+        let strategy_cache = self.strategy_cache.state();
+
+        let payload: HashMap<_, _> = strategy_cache
+            .iter()
+            .map(|(instance_id, (def, _))| (instance_id.clone(), def.clone()))
             .collect();
 
-        Ok(Response::new(candlerunner_api::InstrumentsResponse {
-            instruments,
-        }))
+        warp::reply::json(&payload)
     }
+}
 
-    async fn strategy_definitions(
-        &self,
-        _: Request<candlerunner_api::StrategyDefinitionsRequest>,
-    ) -> Result<Response<candlerunner_api::StrategyDefinitionsResponse>, Status> {
-        fn to_param_type(t: &ParamType) -> candlerunner_api::ParamType {
-            match t {
-                ParamType::Instrument => candlerunner_api::ParamType::Instrument,
-                ParamType::Integer => candlerunner_api::ParamType::Integer,
-                ParamType::Float => candlerunner_api::ParamType::Float,
-                ParamType::Boolean => candlerunner_api::ParamType::Boolean,
-            }
-        }
+pub async fn serve(addr: SocketAddr, component_store: &ComponentStore) -> anyhow::Result<()> {
+    let hello_world = warp::path!().map(|| "Hello, World at root!");
 
-        let definitions: Vec<_> = self
-            .strategy_registry
-            .definitions()
-            .map(|def| {
-                let params: Vec<_> = def
-                    .params()
-                    .iter()
-                    .map(|p| candlerunner_api::ParamDefinition {
-                        param_name: p.name().to_string(),
-                        description: p.description().to_string(),
-                        param_type: to_param_type(p.param_type()) as i32,
-                        default_value: None,
-                    })
-                    .collect();
+    let list_instruments = ListInstruments::new(component_store)?;
+    let list_instruments_view =
+        warp::get().and(warp::path!("list-instruments").map(move || Ok(list_instruments.view())));
 
-                candlerunner_api::StrategyDefinition {
-                    strategy_name: def.strategy_name().to_string(),
-                    description: def.strategy_description().to_string(),
-                    params,
-                }
-            })
-            .collect();
+    let list_strategies = ListStrategies::new(component_store)?;
+    let list_strategies_view =
+        warp::get().and(warp::path!("list-strategies").map(move || Ok(list_strategies.view())));
 
-        Ok(Response::new(
-            candlerunner_api::StrategyDefinitionsResponse { definitions },
-        ))
-    }
+    let instantiate_strategy = InstantiateStrategy::new(component_store)?;
+    let instantiate_strategy_view = warp::post().and(
+        warp::path!("instantiate-strategy")
+            .and(warp::body::json())
+            .and_then(move |def: StrategyInstanceDefinition| {
+                instantiate_strategy.clone().view(def)
+            }),
+    );
 
-    async fn instantiate_strategy(
-        &self,
-        request: Request<candlerunner_api::InstantiateStrategyRequest>,
-    ) -> Result<Response<candlerunner_api::InstantiateStrategyResponse>, Status> {
-        let proto_definition = request
-            .into_inner()
-            .instance_definition
-            .ok_or_else(|| Status::invalid_argument("Field `instance_definition` is missing"))?;
+    let list_strategy_instances = ListStrategyInstances::new(component_store)?;
+    let list_strategy_instances_view = warp::get().and(
+        warp::path!("list-strategy-instances").map(move || Ok(list_strategy_instances.view())),
+    );
 
-        let instance_def = StrategyInstanceDefinition::try_from(proto_definition)?;
-        self.strategy_registry
-            .validate_instance_definition(&instance_def)
-            .map_err(|err| Status::internal(err.to_string()))?;
+    let routes = warp::any().and(
+        hello_world
+            .or(list_instruments_view)
+            .or(list_strategies_view)
+            .or(list_strategy_instances_view)
+            .or(instantiate_strategy_view),
+    );
 
-        self.mongo
-            .write_strategy_execution_status(&instance_def.id(), &StrategyExecutionStatus::Running)
-            .await
-            .map_err(|err| {
-                Status::internal(format!("Failed to write strategy instance to db: {}", err))
-            })?;
+    println!("Listening on {}", addr);
+    warp::serve(routes).run(addr).await;
 
-        self.mongo
-            .write_strategy_instance(&instance_def)
-            .await
-            .map_err(|err| {
-                Status::internal(format!("Failed to write strategy instance to db: {}", err))
-            })?;
-
-        self.strategy_cache
-            .force_update(Some(std::time::Duration::from_millis(100)))
-            .await;
-
-        let id = instance_def.id();
-        if !self.strategy_cache.state().contains_key(&id) {
-            return Err(Status::internal("Failed to instantiate strategy"));
-        }
-
-        Ok(Response::new(
-            candlerunner_api::InstantiateStrategyResponse {
-                instance_id: id.to_string(),
-            },
-        ))
-    }
+    Ok(())
 }

@@ -1,3 +1,3 @@
 mod service;
 
-pub use service::Service;
+pub use service::serve;

@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::models::instruments::Figi;
 use crate::models::market_data::{Candle, CandleResolution};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParamType {
     Instrument,
     Integer,
@@ -36,6 +36,7 @@ pub enum ParamValue {
     Boolean(bool),
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ParamDefinition {
     name: String,
     description: String,
@@ -200,6 +201,7 @@ impl StrategyInstanceDefinition {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct StrategyDefinition {
     params: Vec<ParamDefinition>,
     strategy_name: String,
