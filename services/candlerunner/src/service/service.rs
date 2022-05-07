@@ -1,8 +1,11 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use warp::Filter;
+use warp::{
+    hyper::{Method, StatusCode},
+    Filter,
+};
 
 use component_store::ComponentStore;
 
@@ -171,7 +174,38 @@ impl ListStrategyInstances {
     }
 }
 
+pub async fn handle_rejection(
+    err: warp::Rejection,
+) -> std::result::Result<impl warp::Reply, Infallible> {
+    let code;
+    let json;
+
+    if err.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        json = warp::reply::json(&"Not Found".to_owned());
+    } else if let Some(e) = err.find::<warp::filters::body::BodyDeserializeError>() {
+        code = StatusCode::BAD_REQUEST;
+        json = warp::reply::json(&e.to_string());
+    } else if let Some(e) = err.find::<BadRequest>() {
+        code = StatusCode::BAD_REQUEST;
+        json = warp::reply::json(e);
+    } else if let Some(e) = err.find::<warp::reject::MethodNotAllowed>() {
+        code = StatusCode::METHOD_NOT_ALLOWED;
+        json = warp::reply::json(&e.to_string());
+    } else {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        json = warp::reply::json(&"Internal Server Error".to_owned());
+    }
+
+    Ok(warp::reply::with_status(json, code))
+}
+
 pub async fn serve(addr: SocketAddr, component_store: &ComponentStore) -> anyhow::Result<()> {
+    let cors = warp::cors()
+        .allow_methods(&[Method::GET, Method::POST, Method::OPTIONS])
+        .allow_any_origin()
+        .allow_headers(["access-control-allow-origin", "content-type"]);
+
     let hello_world = warp::path!().map(|| "Hello, World at root!");
 
     let list_instruments = ListInstruments::new(component_store)?;
@@ -196,13 +230,16 @@ pub async fn serve(addr: SocketAddr, component_store: &ComponentStore) -> anyhow
         warp::path!("list-strategy-instances").map(move || Ok(list_strategy_instances.view())),
     );
 
-    let routes = warp::any().and(
-        hello_world
-            .or(list_instruments_view)
-            .or(list_strategies_view)
-            .or(list_strategy_instances_view)
-            .or(instantiate_strategy_view),
-    );
+    let routes = warp::any()
+        .and(
+            hello_world
+                .or(list_instruments_view)
+                .or(list_strategies_view)
+                .or(list_strategy_instances_view)
+                .or(instantiate_strategy_view),
+        )
+        .recover(handle_rejection)
+        .with(cors);
 
     println!("Listening on {}", addr);
     warp::serve(routes).run(addr).await;
