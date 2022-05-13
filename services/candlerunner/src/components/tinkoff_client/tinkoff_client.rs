@@ -1,20 +1,19 @@
-use chrono::{prelude::*, Duration};
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, Endpoint};
+use chrono::prelude::*;
+use tonic::transport::Endpoint;
 
 use component_store::{init_err, prelude::*};
 
-use crate::generated::tinkoff_invest_api::market_data_service_client::MarketDataServiceClient;
-use crate::generated::tinkoff_invest_api::{
-    self, instruments_service_client::InstrumentsServiceClient,
-};
+use crate::models::account::Account;
 use crate::models::instruments::{Figi, Instrument};
-use crate::models::market_data::{Candle, CandleTimeline};
+use crate::models::market_data::CandleTimeline;
 
-use super::interceptor::AuthorizationInterceptor;
+use super::tinkoff_generic_client::TinkoffGenericClient;
+use super::tinkoff_production_client::TinkoffProductionClient;
+use super::tinkoff_sandbox_client::TinkoffSandboxClient;
 
 pub struct TinkoffClient {
-    client: InterceptedService<Channel, AuthorizationInterceptor>,
+    sandbox_client: TinkoffSandboxClient,
+    production_client: TinkoffProductionClient,
 }
 
 impl InitComponent for TinkoffClient {
@@ -42,7 +41,8 @@ impl TinkoffClient {
         config: Box<dyn ConfigProvider>,
     ) -> Result<Self, ComponentError> {
         let url = config.get_str("url")?;
-        let auth_token = config.get_str("auth_token")?;
+        let sandbox_auth_token = config.get_str("sandbox_auth_token")?.to_owned();
+        let production_auth_token = config.get_str("production_auth_token")?.to_owned();
 
         let channel = Endpoint::new(url.to_string())
             .map_err(init_err)?
@@ -50,75 +50,58 @@ impl TinkoffClient {
             .await
             .map_err(init_err)?;
 
-        let interceptor = AuthorizationInterceptor::new(auth_token)?;
-        let client = InterceptedService::new(channel, interceptor);
+        let sandbox_client = TinkoffSandboxClient::new(channel.clone(), sandbox_auth_token)?;
+        let production_client = TinkoffProductionClient::new(channel, production_auth_token)?;
 
-        return Ok(Self { client });
+        return Ok(Self {
+            sandbox_client,
+            production_client,
+        });
     }
 
     pub async fn get_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
-        let mut instruments_client = InstrumentsServiceClient::new(self.client.clone());
-
-        let request = tinkoff_invest_api::InstrumentsRequest {
-            instrument_status: tinkoff_invest_api::InstrumentStatus::Base as i32,
-        };
-
-        let shares_resp = instruments_client.shares(request).await?;
-        let res: Vec<_> = shares_resp
-            .into_inner()
-            .instruments
-            .into_iter()
-            .map(From::<tinkoff_invest_api::Share>::from)
-            .collect();
-
-        Ok(res)
+        self.sandbox_client.get_instruments().await
     }
 
     pub async fn get_candles(
         &self,
         figi: &Figi,
-        mut from: DateTime<Utc>,
+        from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> anyhow::Result<CandleTimeline> {
-        let mut market_data_client = MarketDataServiceClient::new(self.client.clone());
+        self.sandbox_client.get_candles(figi, from, to).await
+    }
 
-        let time_step = Duration::days(1);
-
-        let mut timeline = CandleTimeline::default();
-
-        while from < to {
-            let req_to = std::cmp::min(from + time_step, to);
-
-            let request = tinkoff_invest_api::GetCandlesRequest {
-                figi: figi.0.clone(),
-                from: Some(::prost_types::Timestamp {
-                    seconds: from.timestamp(),
-                    nanos: from.nanosecond() as i32,
-                }),
-                to: Some(::prost_types::Timestamp {
-                    seconds: req_to.timestamp(),
-                    nanos: req_to.nanosecond() as i32,
-                }),
-                interval: tinkoff_invest_api::CandleInterval::CandleInterval1Min as i32,
-            };
-
-            let candles_resp = market_data_client.get_candles(request).await?;
-
-            for proto_candle in candles_resp.into_inner().candles {
-                let time = proto_candle
-                    .time
-                    .as_ref()
-                    .map(|ts| Utc.timestamp(ts.seconds, ts.nanos as u32))
-                    .ok_or_else(|| anyhow::anyhow!("HistoricalCandle `time` field is missing"))?;
-
-                let candle = Candle::try_from(proto_candle)?;
-
-                timeline.insert(time, candle);
+    pub async fn list_accounts(&self) -> anyhow::Result<Vec<Account>> {
+        let sandbox_accounts = self.sandbox_client.list_accounts().await;
+        let sandbox_accounts = match sandbox_accounts {
+            Ok(accts) => accts,
+            Err(err) => {
+                println!("Failed to fetch sandbox accounts: {}", err.to_string());
+                vec![]
             }
+        };
 
-            from = req_to;
-        }
+        let production_accounts = self.production_client.list_accounts().await;
+        let production_accounts = match production_accounts {
+            Ok(accts) => accts,
+            Err(err) => {
+                println!("Failed to fetch production accounts: {}", err.to_string());
+                vec![]
+            }
+        };
 
-        Ok(timeline)
+        return Ok(sandbox_accounts
+            .into_iter()
+            .chain(production_accounts.into_iter())
+            .collect());
+    }
+
+    pub async fn open_sandbox_account(&self) -> anyhow::Result<()> {
+        self.sandbox_client.open_sandbox_account().await
+    }
+
+    pub async fn close_sandbox_account(&self, account: &Account) -> anyhow::Result<()> {
+        self.sandbox_client.close_sandbox_account(account).await
     }
 }

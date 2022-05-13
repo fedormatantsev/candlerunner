@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = service_config.get_str("address")?.parse()?;
 
     let component_store = ComponentStore::builder()
+        .register::<components::AccountsCache>()?
         .register::<components::InstrumentCache>()?
         .register::<components::InstrumentSync>()?
         .register::<components::MarketDataSync>()?
