@@ -8,7 +8,7 @@ use crate::models::market_data::Candle;
 use crate::models::params::{ParamDefinition, ParamError, ParamType, ParamValue};
 use crate::models::strategy::{
     InstantiateStrategyError, Strategy, StrategyDefinition, StrategyExecutionContext,
-    StrategyExecutionError, StrategyExecutionOutput, StrategyFactory,
+    StrategyExecutionError, StrategyFactory,
 };
 
 const PARAM_NAME_INSTRUMENT: &str = "Instrument";
@@ -37,12 +37,10 @@ impl Strategy for BuyAndHold {
         _ts: DateTime<Utc>,
         _candles: HashMap<Figi, Candle>,
         _: Option<StrategyExecutionContext>,
-    ) -> Result<StrategyExecutionOutput, StrategyExecutionError> {
-        Ok(StrategyExecutionOutput::Available(
-            StrategyExecutionContext::new(
-                vec![(self.figi.clone(), 1.0f64)],
-                bson::Document::default(),
-            ),
+    ) -> Result<StrategyExecutionContext, StrategyExecutionError> {
+        Ok(StrategyExecutionContext::new(
+            vec![(self.figi.clone(), 1.0f64)],
+            bson::Document::default(),
         ))
     }
 }

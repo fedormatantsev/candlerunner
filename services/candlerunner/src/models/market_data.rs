@@ -33,19 +33,15 @@ impl CandleResolution {
     }
 }
 
+/// Data availability on a trading day
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DataAvailability {
-    one_minute_candles: usize,
-    one_hour_candles: usize,
-    one_day_candles: usize,
-}
+pub enum DataAvailability {
+    /// Data was not fetched from data provider
+    Unavailable,
 
-impl DataAvailability {
-    pub fn new(one_minute_candles: usize, one_hour_candles: usize, one_day_candles: usize) -> Self {
-        Self {
-            one_minute_candles,
-            one_hour_candles,
-            one_day_candles,
-        }
-    }
+    /// Data for complete day is available
+    Available,
+
+    /// Data is available from 00:00 up to cursor
+    PartiallyAvailable { cursor: DateTime<Utc> },
 }
