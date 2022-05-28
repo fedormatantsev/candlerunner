@@ -6,75 +6,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::models::instance_id::InstanceId;
 use crate::models::instruments::Figi;
 use crate::models::market_data::{Candle, CandleResolution};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ParamType {
-    Instrument,
-    Integer,
-    Float,
-    Boolean,
-}
-
-impl From<&ParamValue> for ParamType {
-    fn from(value: &ParamValue) -> Self {
-        match value {
-            ParamValue::Instrument(_) => Self::Instrument,
-            ParamValue::Integer(_) => Self::Integer,
-            ParamValue::Float(_) => Self::Float,
-            ParamValue::Boolean(_) => Self::Boolean,
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub enum ParamValue {
-    Instrument(Figi),
-    Integer(i64),
-    Float(f64),
-    Boolean(bool),
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ParamDefinition {
-    name: String,
-    description: String,
-    param_type: ParamType,
-    default_value: Option<ParamValue>,
-}
-
-impl ParamDefinition {
-    pub fn new<N: ToString, D: ToString>(
-        name: N,
-        description: D,
-        param_type: ParamType,
-        default_value: Option<ParamValue>,
-    ) -> Self {
-        Self {
-            name: name.to_string(),
-            description: description.to_string(),
-            param_type,
-            default_value,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
-    pub fn param_type(&self) -> &ParamType {
-        &self.param_type
-    }
-
-    pub fn default_value(&self) -> &Option<ParamValue> {
-        &self.default_value
-    }
-}
+use crate::models::params::{ParamDefinition, ParamError, ParamValue};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StrategyInstanceDefinition {
@@ -94,24 +29,8 @@ fn get_strategy_instance_ns() -> &'static Uuid {
     }
 }
 
-impl StrategyInstanceDefinition {
-    pub fn new<N: ToString>(
-        strategy_name: N,
-        params: HashMap<String, ParamValue>,
-        time_from: DateTime<Utc>,
-        time_to: Option<DateTime<Utc>>,
-        resolution: CandleResolution,
-    ) -> Self {
-        Self {
-            strategy_name: strategy_name.to_string(),
-            params,
-            time_from,
-            time_to,
-            resolution,
-        }
-    }
-
-    pub fn id(&self) -> Uuid {
+impl InstanceId for StrategyInstanceDefinition {
+    fn id(&self) -> Uuid {
         let mut bytes: Vec<u8> = Default::default();
         bytes.extend_from_slice(self.strategy_name.as_bytes());
         bytes.push(0);
@@ -179,6 +98,24 @@ impl StrategyInstanceDefinition {
 
         Uuid::new_v5(get_strategy_instance_ns(), &bytes)
     }
+}
+
+impl StrategyInstanceDefinition {
+    pub fn new<N: ToString>(
+        strategy_name: N,
+        params: HashMap<String, ParamValue>,
+        time_from: DateTime<Utc>,
+        time_to: Option<DateTime<Utc>>,
+        resolution: CandleResolution,
+    ) -> Self {
+        Self {
+            strategy_name: strategy_name.to_string(),
+            params,
+            time_from,
+            time_to,
+            resolution,
+        }
+    }
 
     pub fn strategy_name(&self) -> &str {
         &self.strategy_name
@@ -243,27 +180,47 @@ pub enum StrategyExecutionError {
     NonFixableFailure,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Copy, Clone)]
 pub enum StrategyExecutionStatus {
     Running,
     Finished,
     Failed,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct StrategyExecutionState {
+    status: StrategyExecutionStatus,
+    cursor: DateTime<Utc>,
+}
+
+impl StrategyExecutionState {
+    pub fn new(status: StrategyExecutionStatus, cursor: DateTime<Utc>) -> Self {
+        Self { status, cursor }
+    }
+
+    pub fn status(&self) -> StrategyExecutionStatus {
+        self.status
+    }
+
+    pub fn cursor(&self) -> DateTime<Utc> {
+        self.cursor
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StrategyExecutionContext {
-    output: f64,
+    signals: Vec<(Figi, f64)>,
     meta: bson::Document,
 }
 
 impl StrategyExecutionContext {
-    pub fn new(output: f64, meta: bson::Document) -> Self {
-        Self { output, meta }
+    pub fn new(signals: Vec<(Figi, f64)>, meta: bson::Document) -> Self {
+        Self { signals, meta }
     }
 
     /// Get the strategy execution context's output.
-    pub fn output(&self) -> f64 {
-        self.output
+    pub fn signals(&self) -> &[(Figi, f64)] {
+        &self.signals
     }
 }
 
@@ -283,17 +240,16 @@ pub trait Strategy: Send + Sync + 'static {
 }
 
 #[derive(Error, Debug)]
-pub enum CreateStrategyError {
+pub enum InstantiateStrategyError {
     #[error("Strategy `{0}` is not found")]
-    StrategyNotFound(String),
-    #[error("Strategy parameter `{0}` is not specified")]
-    ParamMissing(String),
-    #[error("Invalid strategy parameter `{0}`")]
-    InvalidParam(String),
-    #[error("Strategy parameter `{0}` is of wrong type")]
-    ParamTypeMismatch(String),
+    NotFound(String),
     #[error("Failed to instantiate strategy: {0}")]
-    FailedToInstantiateStrategy(String),
+    FailedToInstantiate(String),
+    #[error("Params validation failed")]
+    ParamValidationFailed {
+        #[from]
+        source: ParamError,
+    },
 }
 
 pub trait StrategyFactory: Sync + Send + 'static {
@@ -302,5 +258,5 @@ pub trait StrategyFactory: Sync + Send + 'static {
     fn create(
         &self,
         params: &HashMap<String, ParamValue>,
-    ) -> Result<Arc<dyn Strategy>, CreateStrategyError>;
+    ) -> Result<Arc<dyn Strategy>, InstantiateStrategyError>;
 }
