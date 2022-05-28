@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bson::from_bson;
+use bson::{from_bson, to_bson};
 use chrono::prelude::*;
 use futures::stream::StreamExt;
 use futures::{TryFutureExt, TryStreamExt};
@@ -296,7 +296,7 @@ impl Mongo {
     ) -> anyhow::Result<()> {
         let collection = self.db.collection::<Document>("candle_data_availability");
         let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
-        let availability = to_document(&availability)?;
+        let availability = to_bson(&availability)?;
 
         collection
             .update_one(

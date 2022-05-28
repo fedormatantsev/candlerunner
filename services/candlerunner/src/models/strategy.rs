@@ -224,11 +224,6 @@ impl StrategyExecutionContext {
     }
 }
 
-pub enum StrategyExecutionOutput {
-    Unavailable,
-    Available(StrategyExecutionContext),
-}
-
 pub trait Strategy: Send + Sync + 'static {
     fn data_requirements(&self) -> &[Figi];
     fn execute(
@@ -236,7 +231,7 @@ pub trait Strategy: Send + Sync + 'static {
         ts: DateTime<Utc>,
         candles: HashMap<Figi, Candle>,
         prev_context: Option<StrategyExecutionContext>,
-    ) -> Result<StrategyExecutionOutput, StrategyExecutionError>;
+    ) -> Result<StrategyExecutionContext, StrategyExecutionError>;
 }
 
 #[derive(Error, Debug)]

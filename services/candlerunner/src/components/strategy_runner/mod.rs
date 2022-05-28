@@ -1,4 +1,4 @@
 mod strategy_runner;
-mod candle_interpolator;
+mod read_market_data;
 
 pub use strategy_runner::StrategyRunner;

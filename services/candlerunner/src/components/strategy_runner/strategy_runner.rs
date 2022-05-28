@@ -1,26 +1,17 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
-use chrono::prelude::*;
+use chrono::{prelude::*, Duration};
 
 use component_store::prelude::*;
 use periodic_component::{Periodic, PeriodicComponent, PeriodicCreateFuture, PeriodicFuture};
 
-use crate::{
-    components,
-    models::{
-        instruments::Figi,
-        market_data::DataAvailability,
-        strategy::{
-            StrategyExecutionContext, StrategyExecutionError, StrategyExecutionOutput,
-            StrategyExecutionState, StrategyExecutionStatus,
-        },
-    },
+use crate::components;
+use crate::models::strategy::{
+    Strategy, StrategyExecutionContext, StrategyExecutionError, StrategyExecutionState,
+    StrategyExecutionStatus, StrategyInstanceDefinition,
 };
 
-use super::candle_interpolator::CandleInterpolator;
+use super::read_market_data;
 
 pub struct StrategyRunnerPeriodic {
     strategy_cache: Arc<components::StrategyCache>,
@@ -65,226 +56,164 @@ impl StrategyRunnerPeriodic {
         ))
     }
 
+    async fn exec_strategy(
+        &self,
+        strategy_id: &uuid::Uuid,
+        strategy_definition: &StrategyInstanceDefinition,
+        strategy: &dyn Strategy,
+    ) -> anyhow::Result<()> {
+        let execution_state = self
+            .mongo
+            .read_strategy_execution_state(strategy_id)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to read execution state for strategy {}: {}",
+                    strategy_id,
+                    err.to_string()
+                )
+            })?;
+
+        let execution_state = execution_state.unwrap_or_else(|| {
+            StrategyExecutionState::new(
+                StrategyExecutionStatus::Running,
+                strategy_definition.time_from(),
+            )
+        });
+
+        if execution_state.status() != StrategyExecutionStatus::Running {
+            return Ok(());
+        }
+
+        let execution_contexts = self
+            .mongo
+            .read_strategy_execution_contexts(
+                strategy_id,
+                execution_state.cursor() - Duration::seconds(10),
+                strategy_definition.time_to(),
+            )
+            .await?;
+
+        let (time_from, mut prev_context) = execution_contexts
+            .into_iter()
+            .last()
+            .map(|(ts, ctx)| (ts, Some(ctx)))
+            .unwrap_or_else(|| (strategy_definition.time_from(), None));
+
+        let time_to = match strategy_definition.time_to() {
+            Some(ts) => ts,
+            None => Utc::now(),
+        };
+
+        let data_requirements = strategy.data_requirements();
+        let packed_candles = read_market_data::read_market_data(
+            self.mongo.as_ref(),
+            data_requirements,
+            time_from,
+            time_to,
+            strategy_definition.resolution(),
+        )
+        .await?;
+
+        let mut contexts: Vec<(DateTime<Utc>, StrategyExecutionContext)> = Default::default();
+
+        // TODO: execute strategies in chunks
+        for (ts, candles) in packed_candles {
+            let execution_result = strategy.execute(ts, candles, prev_context);
+
+            match execution_result {
+                Ok(ctx) => {
+                    contexts.push((ts, ctx.clone()));
+                    prev_context = Some(ctx);
+                }
+                Err(err) => {
+                    match err {
+                        StrategyExecutionError::NonFixableFailure => {
+                            if let Err(err) = self
+                                .mongo
+                                .write_strategy_execution_state(
+                                    strategy_id,
+                                    &StrategyExecutionState::new(
+                                        StrategyExecutionStatus::Failed,
+                                        ts,
+                                    ),
+                                )
+                                .await
+                            {
+                                println!(
+                                    "Failed to update execution state for strategy {}: {}",
+                                    strategy_id,
+                                    err.to_string()
+                                );
+                            }
+                        }
+                        _ => (),
+                    };
+
+                    println!("Strategy execution failed: {}", err.to_string());
+                    break;
+                }
+            }
+        }
+
+        let cursor = contexts
+            .iter()
+            .last()
+            .map(|(k, _)| k.clone())
+            .unwrap_or(execution_state.cursor());
+
+        let status = match strategy_definition.time_to() {
+            Some(time_to) => {
+                if cursor < time_to {
+                    StrategyExecutionStatus::Running
+                } else {
+                    StrategyExecutionStatus::Finished
+                }
+            }
+            None => StrategyExecutionStatus::Running,
+        };
+
+        self.mongo
+            .write_strategy_execution_state(
+                strategy_id,
+                &StrategyExecutionState::new(status, cursor),
+            )
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to update execution status for strategy {}: {}",
+                    strategy_id,
+                    err.to_string()
+                )
+            })?;
+
+        self.mongo
+            .write_strategy_execution_contexts(strategy_id, contexts)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to write strategy execution contexts for strategy {}: {}",
+                    strategy_id,
+                    err.to_string()
+                )
+            })?;
+
+        Ok(())
+    }
+
     async fn step(
         &mut self,
         prev_state: Arc<<Self as Periodic>::State>,
     ) -> anyhow::Result<Arc<<Self as Periodic>::State>> {
         let strategies = self.strategy_cache.state();
 
-        //
-        // Collect required instruments availability
-        //
-        let data_requirements = strategies.iter().fold(
-            HashSet::<Figi>::default(),
-            |mut instruments, (_, (_, strategy))| {
-                for figi in strategy.data_requirements() {
-                    instruments.insert(figi.clone());
-                }
-
-                return instruments;
-            },
-        );
-
-        let mut availability: HashMap<Figi, BTreeMap<Date<Utc>, DataAvailability>> =
-            Default::default();
-
-        for figi in data_requirements {
-            let payload = self.mongo.read_candle_data_availability(&figi).await;
-            match payload {
-                Ok(data) => {
-                    availability.insert(figi, data);
-                }
-                Err(err) => {
-                    println!(
-                        "Failed to get market availability for {}: {}",
-                        figi.0,
-                        err.to_string()
-                    );
-                }
-            }
-        }
-
-        //
-        // Execute strategies
-        //
         for (strategy_id, (def, strategy)) in strategies.iter() {
-            let execution_state = match self.mongo.read_strategy_execution_state(strategy_id).await
-            {
-                Ok(state) => state,
-                Err(err) => {
-                    println!(
-                        "Failed to read execution state for strategy {}: {}",
-                        strategy_id,
-                        err.to_string()
-                    );
-
-                    continue;
-                }
-            };
-
-            let execution_state = match execution_state {
-                Some(state) => state,
-                None => {
-                    let state = StrategyExecutionState::new(
-                        StrategyExecutionStatus::Running,
-                        def.time_from(),
-                    );
-
-                    if let Err(err) = self
-                        .mongo
-                        .write_strategy_execution_state(strategy_id, &state)
-                        .await
-                    {
-                        println!(
-                            "Failed to update execution status for strategy {}: {}",
-                            strategy_id,
-                            err.to_string()
-                        );
-
-                        continue;
-                    }
-
-                    state
-                }
-            };
-
-            if execution_state.status() != StrategyExecutionStatus::Running {
-                continue;
-            }
-
-            let execution_contexts = self
-                .mongo
-                .read_strategy_execution_contexts(
-                    strategy_id,
-                    def.time_from(), // TODO: fix excessive read, we only want single latest execution context
-                    def.time_to(),
-                )
-                .await?;
-
-            let last_ctx = execution_contexts.into_iter().last();
-
-            let (time_from, mut prev_context) = match last_ctx {
-                Some((ts, ctx)) => (ts, Some(ctx)),
-                None => (def.time_from(), None),
-            };
-
-            let time_to = match def.time_to() {
-                Some(ts) => ts,
-                None => Utc::now(),
-            };
-
-            let data_requirements = strategy.data_requirements();
-
-            let mut interpolator = CandleInterpolator::new(def.resolution());
-
-            for figi in data_requirements.iter() {
-                // TODO: check availability
-                match self.mongo.read_candles(figi, time_from, time_to).await {
-                    Ok(timeline) => interpolator.insert_candle_data(figi, timeline),
-                    Err(err) => println!("Failed to retrieve candles: {}", err),
-                }
-            }
-
-            let interpolated_candles = interpolator.data();
-            let mut contexts: Vec<(DateTime<Utc>, StrategyExecutionContext)> = Default::default();
-
-            // TODO: execute strategies in chunks
-            for (ts, candles) in interpolated_candles {
-                let execution_result = strategy.execute(ts, candles, prev_context);
-
-                match execution_result {
-                    Ok(output) => match output {
-                        StrategyExecutionOutput::Unavailable => {
-                            println!("Strategy output is unavailable, will retry later");
-                            break;
-                        }
-                        StrategyExecutionOutput::Available(ctx) => {
-                            contexts.push((ts, ctx.clone()));
-                            prev_context = Some(ctx);
-                        }
-                    },
-                    Err(err) => {
-                        match err {
-                            StrategyExecutionError::NonFixableFailure => {
-                                if let Err(err) = self
-                                    .mongo
-                                    .write_strategy_execution_state(
-                                        strategy_id,
-                                        &StrategyExecutionState::new(
-                                            StrategyExecutionStatus::Failed,
-                                            ts,
-                                        ),
-                                    )
-                                    .await
-                                {
-                                    println!(
-                                        "Failed to update execution state for strategy {}: {}",
-                                        strategy_id,
-                                        err.to_string()
-                                    );
-                                }
-                            }
-                            _ => (),
-                        };
-
-                        println!("Strategy execution failed: {}", err.to_string());
-                        break;
-                    }
-                }
-            }
-
-            let cursor = contexts
-                .iter()
-                .last()
-                .map(|(k, _)| k.clone())
-                .unwrap_or(execution_state.cursor());
-
-            let status = match def.time_to() {
-                Some(time_to) => {
-                    if cursor < time_to {
-                        StrategyExecutionStatus::Running
-                    } else {
-                        StrategyExecutionStatus::Finished
-                    }
-                }
-                None => StrategyExecutionStatus::Running,
-            };
-
-            match self
-                .mongo
-                .write_strategy_execution_state(
-                    strategy_id,
-                    &StrategyExecutionState::new(status, cursor),
-                )
+            if let Err(err) = self
+                .exec_strategy(strategy_id, def, strategy.as_ref())
                 .await
             {
-                Ok(_) => (),
-                Err(err) => {
-                    println!(
-                        "Failed to update execution status for strategy {}: {}",
-                        strategy_id,
-                        err.to_string()
-                    );
-
-                    continue;
-                }
+                println!("Failed to execute strategy: {}", err.to_string());
             }
-
-            match self
-                .mongo
-                .write_strategy_execution_contexts(strategy_id, contexts)
-                .await
-            {
-                Ok(_) => (),
-                Err(err) => {
-                    println!(
-                        "Failed to write strategy execution contexts for strategy {}: {}",
-                        strategy_id,
-                        err.to_string()
-                    );
-                    continue;
-                }
-            };
         }
 
         return Ok(prev_state);

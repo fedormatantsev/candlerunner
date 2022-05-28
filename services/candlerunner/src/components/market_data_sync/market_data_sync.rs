@@ -1,11 +1,13 @@
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use chrono::prelude::*;
 use component_store::prelude::*;
 use periodic_component::{Periodic, PeriodicComponent};
 
 use crate::components;
-use crate::models::{instruments::Figi, market_data::DataAvailability};
+use crate::models::instruments::Figi;
+use crate::models::market_data::DataAvailability;
 
 use super::requirements_collector::{Ranges, RequirementsCollector};
 
@@ -80,42 +82,29 @@ impl Periodic for MarketDataSyncPeriodic {
 }
 
 impl MarketDataSyncPeriodic {
-    async fn sync_candle_data(&self, figi: &Figi, date: Date<Utc>) -> anyhow::Result<()> {
-        let request_ts = date.and_hms(0, 0, 0);
-
+    async fn sync_candle_data(&self, figi: &Figi, cursor: DateTime<Utc>) -> anyhow::Result<()> {
         let candles = self
             .tinkoff_client
-            .get_candles(&figi, request_ts, date.succ().and_hms(0, 0, 0))
+            .get_candles(&figi, cursor, cursor.date().and_hms(23, 59, 59))
             .await?;
 
-        let mut cursor: Option<DateTime<Utc>> = None;
+        let today = Utc::now().date();
 
-        let mut one_minute_candles = 0usize;
-        let mut one_hour_candles = 0usize;
-        let mut one_day_candles = 0usize;
+        let availability = if cursor.date() == today {
+            let new_cursor = candles
+                .iter()
+                .last()
+                .map(|(ts, _)| ts.clone())
+                .unwrap_or(cursor);
 
-        for (ts, _) in candles.iter() {
-            if let Some(cursor) = cursor {
-                if cursor.hour() < ts.hour() {
-                    one_hour_candles += 1;
-                    one_minute_candles += 1;
-                } else if cursor.minute() < ts.minute() {
-                    one_minute_candles += 1;
-                }
-            } else {
-                one_day_candles += 1;
-            }
-
-            cursor = Some(*ts);
-        }
+            DataAvailability::PartiallyAvailable { cursor: new_cursor }
+        } else {
+            DataAvailability::Available
+        };
 
         self.mongo.write_candles(&figi, candles).await?;
         self.mongo
-            .write_candle_data_availability(
-                &figi,
-                date,
-                DataAvailability::new(one_minute_candles, one_hour_candles, one_day_candles),
-            )
+            .write_candle_data_availability(&figi, cursor.date(), availability)
             .await?;
 
         Ok(())
@@ -124,37 +113,49 @@ impl MarketDataSyncPeriodic {
     async fn sync_market_data_ranges(&self, figi: &Figi, ranges: Ranges) -> anyhow::Result<()> {
         let availability = self.mongo.read_candle_data_availability(&figi).await?;
 
-        let days = ranges
-            .into_iter()
-            .fold(HashSet::<Date<Utc>>::default(), |mut days, range| {
-                let mut from = range.0.date();
-                let to = range.1.date().succ();
+        let cursors =
+            ranges
+                .into_iter()
+                .fold(HashSet::<DateTime<Utc>>::default(), |mut cursors, range| {
+                    let mut from = range.0.date();
+                    let to = range.1.date().succ();
 
-                while from < to {
-                    if let None = availability.get(&from) {
-                        days.insert(from);
+                    while from < to {
+                        let availability = availability
+                            .get(&from)
+                            .cloned()
+                            .unwrap_or(DataAvailability::Unavailable);
+
+                        let cursor = match availability {
+                            DataAvailability::Unavailable => Some(from.and_hms(0, 0, 0)),
+                            DataAvailability::Available => None,
+                            DataAvailability::PartiallyAvailable { cursor } => Some(cursor.clone()),
+                        };
+
+                        if let Some(cursor) = cursor {
+                            cursors.insert(cursor);
+                        }
+
+                        from = from.succ();
                     }
 
-                    from = from.succ();
-                }
-
-                days
-            });
+                    cursors
+                });
 
         let mut chunks_fetched = 0;
 
-        for date in days {
+        for cursor in cursors {
             if chunks_fetched > self.max_chunks_per_instrument {
                 break;
             }
 
-            let fetch_result = self.sync_candle_data(&figi, date).await;
+            let fetch_result = self.sync_candle_data(&figi, cursor).await;
 
             if let Err(err) = fetch_result {
                 println!(
                     "Failed to fetch candles data for {} at {}: {}",
                     figi.0,
-                    date,
+                    cursor.date(),
                     err.to_string(),
                 );
                 continue;
