@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bson::{from_bson, to_bson};
+use bson::from_bson;
 use chrono::prelude::*;
 use futures::stream::StreamExt;
 use futures::{TryFutureExt, TryStreamExt};
@@ -13,10 +13,14 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use component_store::{init_err, prelude::*};
 
+use crate::models::instance_id::InstanceId;
 use crate::models::instruments::{Figi, Instrument};
 use crate::models::market_data::{Candle, CandleTimeline, DataAvailability};
+use crate::models::position_manager::{
+    PositionManagerExecutionState, PositionManagerInstanceDefinition,
+};
 use crate::models::strategy::{
-    StrategyExecutionContext, StrategyExecutionStatus, StrategyInstanceDefinition,
+    StrategyExecutionContext, StrategyExecutionState, StrategyInstanceDefinition,
 };
 
 const CANDLE_DATA_COLLECTION_NAME: &str = "candle_data";
@@ -252,7 +256,7 @@ impl Mongo {
                     "$and": [
                         {
                             "ts": {
-                                "$gte": time_from
+                                "$gt": time_from
                             },
                         },
                         {
@@ -274,11 +278,9 @@ impl Mongo {
             let ts = get_datetime(&doc, "ts")?;
             let candle_doc = doc
                 .get("candle")
-                .ok_or_else(|| anyhow::anyhow!("`candle` field is missing"))?
-                .as_document()
-                .ok_or_else(|| anyhow::anyhow!("`candle` field is not a document"))?;
+                .ok_or_else(|| anyhow::anyhow!("`candle` field is missing"))?;
 
-            let candle = from_document::<Candle>(candle_doc.clone())?;
+            let candle = from_bson::<Candle>(candle_doc.clone())?;
 
             candles.insert(ts, candle);
         }
@@ -324,11 +326,9 @@ impl Mongo {
             let ts = get_datetime(&doc, "ts")?;
             let availability = doc
                 .get("availability")
-                .ok_or_else(|| anyhow::anyhow!("`availability` field is missing"))?
-                .as_document()
-                .ok_or_else(|| anyhow::anyhow!("`availability` field is not a document"))?;
+                .ok_or_else(|| anyhow::anyhow!("`availability` field is missing"))?;
 
-            let availability = from_document::<DataAvailability>(availability.clone())?;
+            let availability = from_bson::<DataAvailability>(availability.clone())?;
             res.insert(ts.date(), availability);
         }
 
@@ -356,7 +356,7 @@ impl Mongo {
                 "$and": [
                     {
                         "ts": {
-                            "$gte": time_from
+                            "$gt": time_from
                         }
                     },
                     {
@@ -370,7 +370,7 @@ impl Mongo {
             None => doc! {
                 "strategy_id": strategy_id,
                 "ts": {
-                    "$gte": time_from
+                    "$gt": time_from
                 }
             },
         };
@@ -382,11 +382,9 @@ impl Mongo {
             let ts = get_datetime(&doc, "ts")?;
             let ctx_doc = doc
                 .get("context")
-                .ok_or_else(|| anyhow::anyhow!("`context` field is missing from document"))?
-                .as_document()
-                .ok_or_else(|| anyhow::anyhow!("`context` field is not a document"))?;
+                .ok_or_else(|| anyhow::anyhow!("`context` field is missing from document"))?;
 
-            let ctx = from_document::<StrategyExecutionContext>(ctx_doc.clone())?;
+            let ctx = from_bson::<StrategyExecutionContext>(ctx_doc.clone())?;
 
             contexts.insert(ts, ctx);
         }
@@ -421,21 +419,18 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn write_strategy_execution_status(
+    pub async fn write_strategy_execution_state(
         &self,
         strategy_id: &uuid::Uuid,
-        status: &StrategyExecutionStatus,
+        state: &StrategyExecutionState,
     ) -> anyhow::Result<()> {
-        let collection = self.db.collection::<Document>("strategy_execution_status");
-        let status = to_bson(status)?;
+        let collection = self.db.collection::<Document>("strategy_execution_state");
+        let state = to_document(state)?;
 
         collection
             .update_one(
                 doc! { "strategy_id": strategy_id },
-                doc! {"$set": {
-                        "status": status
-                    }
-                },
+                doc! { "$set": { "state": state } },
                 UpdateOptions::builder().upsert(true).build(),
             )
             .await?;
@@ -443,24 +438,96 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn read_strategy_execution_status(
+    pub async fn read_strategy_execution_state(
         &self,
         strategy_id: &uuid::Uuid,
-    ) -> anyhow::Result<StrategyExecutionStatus> {
-        let collection = self.db.collection::<Document>("strategy_execution_status");
+    ) -> anyhow::Result<Option<StrategyExecutionState>> {
+        let collection = self.db.collection::<Document>("strategy_execution_state");
 
         let doc = collection
             .find_one(doc! {"strategy_id": strategy_id}, None)
             .await?;
 
-        let status_doc = doc
-            .ok_or_else(|| {
-                anyhow::anyhow!("Strategy execution status not found for {}", strategy_id)
-            })?
-            .get("status")
-            .ok_or_else(|| anyhow::anyhow!("Field `status` is missing"))?
-            .clone();
+        if let Some(doc) = doc {
+            let state_doc = doc
+                .get("state")
+                .ok_or_else(|| anyhow::anyhow!("Field `state` is missing"))?
+                .clone();
 
-        Ok(from_bson::<StrategyExecutionStatus>(status_doc)?)
+            return Ok(Some(from_bson::<StrategyExecutionState>(state_doc)?));
+        };
+
+        Ok(None)
+    }
+
+    pub async fn write_position_manager_instance(
+        &self,
+        instance_def: &PositionManagerInstanceDefinition,
+    ) -> anyhow::Result<()> {
+        let collection = self.db.collection::<Document>("position_manager_instances");
+        let doc = to_document(instance_def)?;
+
+        collection
+            .update_one(
+                doc! {"_id": instance_def.id()},
+                doc! {"$set": doc},
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn read_position_manager_instances(
+        &self,
+    ) -> anyhow::Result<Vec<PositionManagerInstanceDefinition>> {
+        return self
+            .read_items::<PositionManagerInstanceDefinition>("position_manager_instances")
+            .await;
+    }
+
+    pub async fn write_position_manager_execution_state(
+        &self,
+        position_manager_id: &uuid::Uuid,
+        state: &PositionManagerExecutionState,
+    ) -> anyhow::Result<()> {
+        let collection = self
+            .db
+            .collection::<Document>("position_manager_execution_state");
+        let state = to_document(state)?;
+
+        collection
+            .update_one(
+                doc! { "position_manager_id": position_manager_id },
+                doc! { "$set": { "state": state } },
+                UpdateOptions::builder().upsert(true).build(),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn read_position_manager_execution_state(
+        &self,
+        position_manager_id: &uuid::Uuid,
+    ) -> anyhow::Result<Option<PositionManagerExecutionState>> {
+        let collection = self
+            .db
+            .collection::<Document>("position_manager_execution_state");
+
+        let doc = collection
+            .find_one(doc! {"position_manager_id": position_manager_id}, None)
+            .await?;
+
+        if let Some(doc) = doc {
+            let state_doc = doc
+                .get("state")
+                .ok_or_else(|| anyhow::anyhow!("Field `state` is missing"))?
+                .clone();
+
+            return Ok(Some(from_bson::<PositionManagerExecutionState>(state_doc)?));
+        };
+
+        Ok(None)
     }
 }

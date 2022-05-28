@@ -9,6 +9,7 @@ use crate::generated::tinkoff_invest_api::sandbox_service_client::SandboxService
 use crate::models::account::{AccessLevel, Account, AccountId, Environment};
 use crate::models::instruments::{Figi, Instrument};
 use crate::models::market_data::{Candle, CandleTimeline};
+use crate::models::positions::{AccountPositions, Position, Currency};
 
 use super::interceptor::AuthorizationInterceptor;
 use super::tinkoff_generic_client::TinkoffGenericClient;
@@ -165,5 +166,31 @@ impl TinkoffGenericClient for TinkoffSandboxClient {
             .collect();
 
         Ok(res)
+    }
+
+    async fn list_positions(&self, account: &Account) -> anyhow::Result<AccountPositions> {
+        let mut sandbox_client = SandboxServiceClient::new(self.client.clone());
+
+        let resp = sandbox_client
+            .get_sandbox_positions(tinkoff_invest_api::PositionsRequest {
+                account_id: account.id.0.clone(),
+            })
+            .await?
+            .into_inner();
+
+        let positions = resp.securities.into_iter().map(|proto| Position {
+            figi: Figi(proto.figi),
+            lots: proto.balance,
+        });
+
+        let currencies = resp.money.into_iter().map(|proto| Currency {
+            iso_currency: proto.currency,
+            amount: (proto.units as f64) + (proto.nano as f64) * 1.0e-9f64,
+        });
+
+        Ok(AccountPositions {
+            currencies: currencies.collect(),
+            positions: positions.collect(),
+        })
     }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
-    import Strategies from "../components/Strategies.svelte";
-	import Accounts from "../components/Accounts.svelte";
+	import Strategies from '../components/Strategies.svelte';
+	import Accounts from '../components/Accounts.svelte';
+	import PositionManagers from '../components/PositionManagers.svelte';
 </script>
 
 <div class="min-h-full">
@@ -16,7 +17,8 @@
 		</div>
 	</nav>
 	<div class="container mx-auto py-6">
-		<Accounts></Accounts>
-        <Strategies></Strategies>
+		<Accounts />
+		<Strategies />
+		<PositionManagers />
 	</div>
 </div>

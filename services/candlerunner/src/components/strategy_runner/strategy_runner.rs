@@ -15,7 +15,7 @@ use crate::{
         market_data::DataAvailability,
         strategy::{
             StrategyExecutionContext, StrategyExecutionError, StrategyExecutionOutput,
-            StrategyExecutionStatus,
+            StrategyExecutionState, StrategyExecutionStatus,
         },
     },
 };
@@ -108,46 +108,63 @@ impl StrategyRunnerPeriodic {
         // Execute strategies
         //
         for (strategy_id, (def, strategy)) in strategies.iter() {
-            let execution_status =
-                match self.mongo.read_strategy_execution_status(strategy_id).await {
-                    Ok(status) => status,
-                    Err(err) => {
+            let execution_state = match self.mongo.read_strategy_execution_state(strategy_id).await
+            {
+                Ok(state) => state,
+                Err(err) => {
+                    println!(
+                        "Failed to read execution state for strategy {}: {}",
+                        strategy_id,
+                        err.to_string()
+                    );
+
+                    continue;
+                }
+            };
+
+            let execution_state = match execution_state {
+                Some(state) => state,
+                None => {
+                    let state = StrategyExecutionState::new(
+                        StrategyExecutionStatus::Running,
+                        def.time_from(),
+                    );
+
+                    if let Err(err) = self
+                        .mongo
+                        .write_strategy_execution_state(strategy_id, &state)
+                        .await
+                    {
                         println!(
-                            "Failed to read execution status for strategy {}: {}",
+                            "Failed to update execution status for strategy {}: {}",
                             strategy_id,
                             err.to_string()
                         );
-                        if let Err(err) = self
-                            .mongo
-                            .write_strategy_execution_status(
-                                strategy_id,
-                                &StrategyExecutionStatus::Running,
-                            )
-                            .await
-                        {
-                            println!(
-                                "Failed to update execution status for strategy {}: {}",
-                                strategy_id,
-                                err.to_string()
-                            );
-                        }
-                        StrategyExecutionStatus::Running
-                    }
-                };
 
-            if execution_status != StrategyExecutionStatus::Running {
+                        continue;
+                    }
+
+                    state
+                }
+            };
+
+            if execution_state.status() != StrategyExecutionStatus::Running {
                 continue;
             }
 
             let execution_contexts = self
                 .mongo
-                .read_strategy_execution_contexts(strategy_id, def.time_from(), def.time_to())
+                .read_strategy_execution_contexts(
+                    strategy_id,
+                    def.time_from(), // TODO: fix excessive read, we only want single latest execution context
+                    def.time_to(),
+                )
                 .await?;
 
             let last_ctx = execution_contexts.into_iter().last();
 
             let (time_from, mut prev_context) = match last_ctx {
-                Some((ts, ctx)) => (ts + def.resolution().interval(), Some(ctx)),
+                Some((ts, ctx)) => (ts, Some(ctx)),
                 None => (def.time_from(), None),
             };
 
@@ -161,6 +178,7 @@ impl StrategyRunnerPeriodic {
             let mut interpolator = CandleInterpolator::new(def.resolution());
 
             for figi in data_requirements.iter() {
+                // TODO: check availability
                 match self.mongo.read_candles(figi, time_from, time_to).await {
                     Ok(timeline) => interpolator.insert_candle_data(figi, timeline),
                     Err(err) => println!("Failed to retrieve candles: {}", err),
@@ -170,6 +188,7 @@ impl StrategyRunnerPeriodic {
             let interpolated_candles = interpolator.data();
             let mut contexts: Vec<(DateTime<Utc>, StrategyExecutionContext)> = Default::default();
 
+            // TODO: execute strategies in chunks
             for (ts, candles) in interpolated_candles {
                 let execution_result = strategy.execute(ts, candles, prev_context);
 
@@ -189,14 +208,17 @@ impl StrategyRunnerPeriodic {
                             StrategyExecutionError::NonFixableFailure => {
                                 if let Err(err) = self
                                     .mongo
-                                    .write_strategy_execution_status(
+                                    .write_strategy_execution_state(
                                         strategy_id,
-                                        &StrategyExecutionStatus::Failed,
+                                        &StrategyExecutionState::new(
+                                            StrategyExecutionStatus::Failed,
+                                            ts,
+                                        ),
                                     )
                                     .await
                                 {
                                     println!(
-                                        "Failed to update execution status for strategy {}: {}",
+                                        "Failed to update execution state for strategy {}: {}",
                                         strategy_id,
                                         err.to_string()
                                     );
@@ -211,20 +233,40 @@ impl StrategyRunnerPeriodic {
                 }
             }
 
-            if def.time_to().is_some() {
-                if let Err(err) = self
-                    .mongo
-                    .write_strategy_execution_status(
-                        strategy_id,
-                        &StrategyExecutionStatus::Finished,
-                    )
-                    .await
-                {
+            let cursor = contexts
+                .iter()
+                .last()
+                .map(|(k, _)| k.clone())
+                .unwrap_or(execution_state.cursor());
+
+            let status = match def.time_to() {
+                Some(time_to) => {
+                    if cursor < time_to {
+                        StrategyExecutionStatus::Running
+                    } else {
+                        StrategyExecutionStatus::Finished
+                    }
+                }
+                None => StrategyExecutionStatus::Running,
+            };
+
+            match self
+                .mongo
+                .write_strategy_execution_state(
+                    strategy_id,
+                    &StrategyExecutionState::new(status, cursor),
+                )
+                .await
+            {
+                Ok(_) => (),
+                Err(err) => {
                     println!(
                         "Failed to update execution status for strategy {}: {}",
                         strategy_id,
                         err.to_string()
                     );
+
+                    continue;
                 }
             }
 
@@ -234,12 +276,15 @@ impl StrategyRunnerPeriodic {
                 .await
             {
                 Ok(_) => (),
-                Err(err) => println!(
-                    "Failed to write strategy execution contexts for strategy {}: {}",
-                    strategy_id,
-                    err.to_string()
-                ),
-            }
+                Err(err) => {
+                    println!(
+                        "Failed to write strategy execution contexts for strategy {}: {}",
+                        strategy_id,
+                        err.to_string()
+                    );
+                    continue;
+                }
+            };
         }
 
         return Ok(prev_state);

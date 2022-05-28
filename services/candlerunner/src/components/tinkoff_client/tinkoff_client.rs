@@ -3,9 +3,10 @@ use tonic::transport::Endpoint;
 
 use component_store::{init_err, prelude::*};
 
-use crate::models::account::Account;
+use crate::models::account::{Account, Environment};
 use crate::models::instruments::{Figi, Instrument};
 use crate::models::market_data::CandleTimeline;
+use crate::models::positions::AccountPositions;
 
 use super::tinkoff_generic_client::TinkoffGenericClient;
 use super::tinkoff_production_client::TinkoffProductionClient;
@@ -60,7 +61,7 @@ impl TinkoffClient {
     }
 
     pub async fn get_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
-        self.sandbox_client.get_instruments().await
+        self.production_client.get_instruments().await
     }
 
     pub async fn get_candles(
@@ -69,7 +70,7 @@ impl TinkoffClient {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> anyhow::Result<CandleTimeline> {
-        self.sandbox_client.get_candles(figi, from, to).await
+        self.production_client.get_candles(figi, from, to).await
     }
 
     pub async fn list_accounts(&self) -> anyhow::Result<Vec<Account>> {
@@ -103,5 +104,17 @@ impl TinkoffClient {
 
     pub async fn close_sandbox_account(&self, account: &Account) -> anyhow::Result<()> {
         self.sandbox_client.close_sandbox_account(account).await
+    }
+
+    fn get_client(&self, account: &Account) -> &dyn TinkoffGenericClient {
+        match account.environment {
+            Environment::Sandbox => &self.sandbox_client,
+            Environment::Production => &self.production_client,
+        }
+    }
+
+    pub async fn list_positions(&self, account: &Account) -> anyhow::Result<AccountPositions> {
+        let client = self.get_client(account);
+        client.list_positions(account).await
     }
 }

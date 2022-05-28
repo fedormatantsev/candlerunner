@@ -1,37 +1,35 @@
 <script lang="ts">
-import { onDestroy } from 'svelte';
+	import { IsInstrumentValue, type ParamValue } from '../models/Params';
+	import type { IStrategyInstanceDefinition } from '../models/StrategyInstanceDefinition';
 
 	import { instrumentStore } from '../stores/instrument_store';
 
-	export let strategyDef;
-	let params = [];
-    let instruments = [];
-
-    const unsubscribe = instrumentStore.subscribe((value) => instruments=value);
+	export let instanceDef: IStrategyInstanceDefinition;
+	let params: { paramName: string; paramValue: ParamValue }[] = [];
 
 	$: {
-		function getParamValue(paramDef) {
-			if (paramDef.hasOwnProperty('Instrument')) {
-                const instrument = instruments.find((item) => item.figi == paramDef.Instrument);
+		function getParamValue(paramValue: ParamValue): any {
+			if (IsInstrumentValue(paramValue)) {
+				const instrument = $instrumentStore.find((item) => item.figi == paramValue.Instrument);
 
-                return instrument ? instrument.display_name : "UNKNOWN";
+				return instrument ? instrument.display_name : 'UNKNOWN';
 			}
+
+			return 'UNKNOWN PARAM TYPE';
 		}
 
-		params = Array.from(Object.entries(strategyDef.params), ([paramName, paramDef]) => ({
+		params = Array.from(Object.entries(instanceDef.params), ([paramName, paramValue]) => ({
 			paramName,
-			paramValue: getParamValue(paramDef)
+			paramValue: getParamValue(paramValue)
 		}));
 	}
-
-    onDestroy(unsubscribe);
 </script>
 
 <div
-	class="px-4 w-full min-h-40 bg-gray-200 aspect-w-1 aspect-h-1 rounded-md overflow-hidden h-40 aspect-none"
+	class="px-4 w-full min-h-40 bg-gray-100 aspect-w-1 aspect-h-1 rounded-md overflow-hidden h-40 aspect-none"
 >
 	<div class="mt-4 flex justify-between">
-		<h1 class="text-lg font-bold">{strategyDef.strategy_name}</h1>
+		<h1 class="text-lg font-bold">{instanceDef.strategy_name}</h1>
 	</div>
 	<div class="mt-2">
 		{#each params as param (param.paramName)}
@@ -41,14 +39,18 @@ import { onDestroy } from 'svelte';
 			</div>
 		{/each}
 		<div class="flex">
-			<h2 class="text-sm text-gray-600 font-normal">time from:</h2>
-			<h2 class="text-sm text-gray-600 font-medium pl-2">{strategyDef.time_from}</h2>
+			<h2 class="text-sm text-gray-600 font-normal">Time from:</h2>
+			<h2 class="text-sm text-gray-600 font-medium pl-2">{instanceDef.time_from}</h2>
 		</div>
-		{#if strategyDef.time_to}
+		{#if instanceDef.time_to}
 			<div class="flex">
-				<h2 class="text-sm text-gray-600 font-normal">time to:</h2>
-				<h2 class="text-sm text-gray-600 font-medium pl-2">{strategyDef.time_to}</h2>
+				<h2 class="text-sm text-gray-600 font-normal">Time to:</h2>
+				<h2 class="text-sm text-gray-600 font-medium pl-2">{instanceDef.time_to}</h2>
 			</div>
 		{/if}
+		<div class="flex">
+			<h2 class="text-sm text-gray-600 font-normal">Resolution:</h2>
+			<h2 class="text-sm text-gray-600 font-medium pl-2">{instanceDef.resolution}</h2>
+		</div>
 	</div>
 </div>

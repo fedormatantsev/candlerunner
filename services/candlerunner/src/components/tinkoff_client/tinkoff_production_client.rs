@@ -5,10 +5,12 @@ use tonic::transport::Channel;
 use crate::generated::tinkoff_invest_api;
 use crate::generated::tinkoff_invest_api::instruments_service_client::InstrumentsServiceClient;
 use crate::generated::tinkoff_invest_api::market_data_service_client::MarketDataServiceClient;
+use crate::generated::tinkoff_invest_api::operations_service_client::OperationsServiceClient;
 use crate::generated::tinkoff_invest_api::users_service_client::UsersServiceClient;
 use crate::models::account::{AccessLevel, Account, AccountId, Environment};
 use crate::models::instruments::{Figi, Instrument};
 use crate::models::market_data::{Candle, CandleTimeline};
+use crate::models::positions::{AccountPositions, Currency, Position};
 
 use super::interceptor::AuthorizationInterceptor;
 use super::tinkoff_generic_client::TinkoffGenericClient;
@@ -125,5 +127,31 @@ impl TinkoffGenericClient for TinkoffProductionClient {
             .collect();
 
         Ok(res)
+    }
+
+    async fn list_positions(&self, account: &Account) -> anyhow::Result<AccountPositions> {
+        let mut operations_client = OperationsServiceClient::new(self.client.clone());
+
+        let resp = operations_client
+            .get_positions(tinkoff_invest_api::PositionsRequest {
+                account_id: account.id.0.clone(),
+            })
+            .await?
+            .into_inner();
+
+        let positions = resp.securities.into_iter().map(|proto| Position {
+            figi: Figi(proto.figi),
+            lots: proto.balance,
+        });
+
+        let currencies = resp.money.into_iter().map(|proto| Currency {
+            iso_currency: proto.currency,
+            amount: (proto.units as f64) + (proto.nano as f64) * 1.0e-9f64,
+        });
+
+        Ok(AccountPositions {
+            currencies: currencies.collect(),
+            positions: positions.collect(),
+        })
     }
 }

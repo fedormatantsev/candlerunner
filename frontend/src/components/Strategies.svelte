@@ -1,28 +1,17 @@
 <script lang="ts">
 	import StrategyCard from './StrategyCard.svelte';
 	import Plus from '../icons/Plus.svelte';
-	import CreateInstanceDialog from './create_instance_dialog/CreateInstanceDialog.svelte';
+	import CreateStrategyInstanceDialog from './instantiate_strategy_dialog/InstantiateStrategyDialog.svelte';
+	import { strategyInstanceStore, fetchStrategyInstances } from '../stores/strategy_instance_store';
 
-	let strategyInstances: { instanceId: String; instanceDef: Object }[] = [];
 	let showCreateDialog = false;
-
-	let fetchInstances = async function () {
-		const resp = await fetch('http://127.0.0.1:27001/list-strategy-instances');
-		const json = await resp.json();
-		strategyInstances = Array.from(Object.entries(json), ([instanceId, instanceDef]) => ({
-			instanceId,
-			instanceDef
-		}));
-	};
-
-	fetchInstances();
 </script>
 
-<div>
+<div class="mb-8">
 	{#if showCreateDialog}
-		<CreateInstanceDialog
+		<CreateStrategyInstanceDialog
 			on:close={function () {
-				fetchInstances();
+				fetchStrategyInstances();
 				showCreateDialog = false;
 			}}
 		/>
@@ -41,9 +30,9 @@
 	</div>
 
 	<div class="mt-6 grid grid-cols-1 gap-y-10 gap-x-6 sm:grid-cols-2 lg:grid-cols-4 xl:gap-x-8">
-		{#each strategyInstances as instance (instance.instanceId)}
+		{#each $strategyInstanceStore as instance (instance.instanceId)}
 			<div class="group relative">
-				<StrategyCard strategyDef={instance.instanceDef} />
+				<StrategyCard instanceDef={instance.instanceDef} />
 			</div>
 		{/each}
 	</div>

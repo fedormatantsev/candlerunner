@@ -1,44 +1,38 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
-
 	import { instrumentStore } from '../../stores/instrument_store';
+	import type { ParamValue } from '../../models/Params';
+	import type { IInstrument } from 'src/models/Instrument';
 
-	export let paramValue: any = {};
+	export let paramValue: ParamValue | null = null;
 
 	let inputValue: String = '';
-	let instruments: { figi: String; ticker: String; display_name: String }[] = [];
-	let filteredInstruments: { figi: String; ticker: String; display_name: String }[] = [];
-	let selectedInstrument: { figi: String; ticker: String; display_name: String } | undefined =
-		undefined;
+	let filteredInstruments: IInstrument[] = [];
+	let selectedInstrument: IInstrument | undefined = undefined;
 
-	const unsubscribe = instrumentStore.subscribe((value) => (instruments = value));
-
-	let setInstrument = function (instrument) {
+	let setInstrument = function (instrument: IInstrument) {
 		inputValue = instrument.display_name;
 		paramValue = { Instrument: instrument.figi };
 	};
 
 	$: {
 		if (inputValue.length > 0) {
-			function filter(item) {
+			function filter(item: IInstrument) {
 				return (
 					item.display_name.toLowerCase().startsWith(inputValue.toLowerCase()) ||
 					item.ticker.toLowerCase().startsWith(inputValue.toLowerCase())
 				);
 			}
 
-			function match(item) {
+			function match(item: IInstrument) {
 				return item.display_name.toLowerCase() === inputValue.toLowerCase();
 			}
 
-			filteredInstruments = instruments.filter(filter);
-			selectedInstrument = instruments.find(match);
+			filteredInstruments = $instrumentStore.filter(filter);
+			selectedInstrument = $instrumentStore.find(match);
 		} else {
 			filteredInstruments = [];
 		}
 	}
-
-	onDestroy(unsubscribe);
 </script>
 
 <input

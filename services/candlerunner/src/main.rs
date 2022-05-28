@@ -1,6 +1,7 @@
 mod components;
 mod generated;
 mod models;
+mod position_managers;
 mod service;
 mod strategies;
 
@@ -32,6 +33,11 @@ async fn main() -> anyhow::Result<()> {
         .register::<components::InstrumentSync>()?
         .register::<components::MarketDataSync>()?
         .register::<components::Mongo>()?
+        .register::<components::ParamValidator>()?
+        .register::<components::PositionsCache>()?
+        .register::<components::PositionManagerCache>()?
+        .register::<components::PositionManagerRegistry>()?
+        .register::<components::PositionManagerRunner>()?
         .register::<components::StrategyCache>()?
         .register::<components::StrategyRegistry>()?
         .register::<components::StrategyRunner>()?

@@ -6,22 +6,25 @@ use uuid::Uuid;
 
 use crate::{
     components,
-    models::{strategy::{Strategy, StrategyInstanceDefinition}, instance_id::InstanceId},
+    models::{
+        instance_id::InstanceId,
+        position_manager::{PositionManager, PositionManagerInstanceDefinition},
+    },
 };
 
-pub struct StrategyCachePeriodic {
+pub struct PositionManagerCachePeriodic {
     mongo: Arc<components::Mongo>,
-    registry: Arc<components::StrategyRegistry>,
+    registry: Arc<components::PositionManagerRegistry>,
 }
 
-impl ComponentName for StrategyCachePeriodic {
+impl ComponentName for PositionManagerCachePeriodic {
     fn component_name() -> &'static str {
-        "strategy-cache"
+        "position-manager-cache"
     }
 }
 
-impl Periodic for StrategyCachePeriodic {
-    type State = HashMap<Uuid, (StrategyInstanceDefinition, Arc<dyn Strategy>)>;
+impl Periodic for PositionManagerCachePeriodic {
+    type State = HashMap<Uuid, (PositionManagerInstanceDefinition, Arc<dyn PositionManager>)>;
 
     fn init(
         resolver: ComponentResolver,
@@ -35,13 +38,15 @@ impl Periodic for StrategyCachePeriodic {
     }
 }
 
-impl StrategyCachePeriodic {
+impl PositionManagerCachePeriodic {
     async fn new(
         resolver: ComponentResolver,
         _: Box<dyn ConfigProvider>,
     ) -> Result<(Self, <Self as Periodic>::State), ComponentError> {
         let mongo = resolver.resolve::<components::Mongo>().await?;
-        let registry = resolver.resolve::<components::StrategyRegistry>().await?;
+        let registry = resolver
+            .resolve::<components::PositionManagerRegistry>()
+            .await?;
 
         Ok((
             Self { mongo, registry },
@@ -53,20 +58,22 @@ impl StrategyCachePeriodic {
         &mut self,
         prev_state: Arc<<Self as Periodic>::State>,
     ) -> anyhow::Result<Arc<<Self as Periodic>::State>> {
-        let defs = self.mongo.read_strategy_instances().await?;
+        let defs = self.mongo.read_position_manager_instances().await?;
 
         let mut inserted = 0;
         let mut failed = 0;
 
         let mut instantiate =
-            |id: Uuid, def: StrategyInstanceDefinition, state: &mut <Self as Periodic>::State| {
-                match self.registry.instantiate_strategy(def.clone()) {
+            |id: Uuid,
+             def: PositionManagerInstanceDefinition,
+             state: &mut <Self as Periodic>::State| {
+                match self.registry.instantiate_position_manager(def.clone()) {
                     Ok(instance) => {
                         state.insert(id, (def, instance));
                         inserted += 1;
                     }
                     Err(err) => {
-                        println!("Failed to instantiate strategy: {}", err);
+                        println!("Failed to instantiate position manager: {}", err);
                         failed += 1;
                     }
                 };
@@ -92,7 +99,7 @@ impl StrategyCachePeriodic {
         let removed = prev_state.len() - (new_state.len() - inserted);
 
         println!(
-            "Updated strategy cache: {} inserted, {} removed, {} failed, {} total",
+            "Updated position manager cache: {} inserted, {} removed, {} failed, {} total",
             inserted,
             removed,
             failed,
@@ -103,4 +110,4 @@ impl StrategyCachePeriodic {
     }
 }
 
-pub type StrategyCache = PeriodicComponent<StrategyCachePeriodic>;
+pub type PositionManagerCache = PeriodicComponent<PositionManagerCachePeriodic>;

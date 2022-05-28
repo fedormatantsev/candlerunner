@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Plus from '../icons/Plus.svelte';
 	import { accountsStore, fetchAccounts } from '../stores/accounts_store';
+	import { instrumentStore } from '../stores/instrument_store';
 	import AccountCard from './AccountCard.svelte';
 
 	let openAccount = async function () {
@@ -10,7 +11,7 @@
 		await fetchAccounts();
 	};
 
-	let closeAccount = async function (account_id) {
+	let closeAccount = async function (account_id: string) {
 		await fetch('http://127.0.0.1:27001/close-sandbox-account', {
 			method: 'POST',
 			body: JSON.stringify({
@@ -38,7 +39,7 @@
 	<div class="mt-6 grid grid-cols-1 gap-y-10 gap-x-6 sm:grid-cols-2 lg:grid-cols-4 xl:gap-x-8">
 		{#each $accountsStore as account (account.id)}
 			<div class="group relative">
-				<AccountCard {account} {closeAccount} />
+				<AccountCard {account} {closeAccount} instruments={$instrumentStore} />
 			</div>
 		{/each}
 	</div>
