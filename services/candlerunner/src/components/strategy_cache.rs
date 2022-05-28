@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     components,
-    models::strategy::{Strategy, StrategyInstanceDefinition},
+    models::{strategy::{Strategy, StrategyInstanceDefinition}, instance_id::InstanceId},
 };
 
 pub struct StrategyCachePeriodic {

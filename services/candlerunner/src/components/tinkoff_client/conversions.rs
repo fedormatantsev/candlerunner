@@ -1,4 +1,5 @@
 use crate::generated::tinkoff_invest_api;
+use crate::models::account::AccessLevel;
 use crate::models::instruments::{Figi, Instrument, Ticker};
 use crate::models::market_data::Candle;
 
@@ -47,5 +48,20 @@ impl TryFrom<tinkoff_invest_api::HistoricCandle> for Candle {
             close,
             volume: proto.volume as u64,
         })
+    }
+}
+
+impl From<tinkoff_invest_api::AccessLevel> for AccessLevel {
+    fn from(value: tinkoff_invest_api::AccessLevel) -> Self {
+        match value {
+            tinkoff_invest_api::AccessLevel::AccountAccessLevelUnspecified => {
+                AccessLevel::Unspecified
+            }
+            tinkoff_invest_api::AccessLevel::AccountAccessLevelFullAccess => {
+                AccessLevel::FullAccess
+            }
+            tinkoff_invest_api::AccessLevel::AccountAccessLevelReadOnly => AccessLevel::ReadOnly,
+            tinkoff_invest_api::AccessLevel::AccountAccessLevelNoAccess => AccessLevel::NoAccess,
+        }
     }
 }

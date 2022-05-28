@@ -3,7 +3,8 @@ service:
 
 tinkoff-client:
   url: https://invest-public-api.tinkoff.ru:443
-  auth_token: <token>
+  sandbox_auth_token: <token>
+  production_auth_token: <token>
 
 instrument-sync:
   update_period: 600
@@ -25,3 +26,20 @@ market-data-sync:
 
 strategy-runner:
   update_period: 1
+
+accounts-cache:
+  update_period: 600
+
+positions-cache:
+  update_period: 5
+
+param-validator: {}
+
+position-manager-registry: {}
+
+position-manager-cache:
+  update_period: 1
+
+position-manager-runner:
+  update_period: 1
+  max_execution_context_age: 60

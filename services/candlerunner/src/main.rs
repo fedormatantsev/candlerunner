@@ -1,6 +1,7 @@
 mod components;
 mod generated;
 mod models;
+mod position_managers;
 mod service;
 mod strategies;
 
@@ -27,10 +28,16 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = service_config.get_str("address")?.parse()?;
 
     let component_store = ComponentStore::builder()
+        .register::<components::AccountsCache>()?
         .register::<components::InstrumentCache>()?
         .register::<components::InstrumentSync>()?
         .register::<components::MarketDataSync>()?
         .register::<components::Mongo>()?
+        .register::<components::ParamValidator>()?
+        .register::<components::PositionsCache>()?
+        .register::<components::PositionManagerCache>()?
+        .register::<components::PositionManagerRegistry>()?
+        .register::<components::PositionManagerRunner>()?
         .register::<components::StrategyCache>()?
         .register::<components::StrategyRegistry>()?
         .register::<components::StrategyRunner>()?
