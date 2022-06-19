@@ -1,8 +1,6 @@
 use warp::hyper::StatusCode;
 
-use crate::models::{
-    position_manager::InstantiatePositionManagerError, strategy::InstantiateStrategyError,
-};
+use crate::models::strategy::InstantiateStrategyError;
 
 pub enum ServiceError {
     NotFound(String),
@@ -44,23 +42,6 @@ impl From<InstantiateStrategyError> for ServiceError {
             }
             InstantiateStrategyError::ParamValidationFailed { source: _ } => {
                 ServiceError::BadRequest(err.to_string())
-            }
-        }
-    }
-}
-
-impl From<InstantiatePositionManagerError> for ServiceError {
-    fn from(err: InstantiatePositionManagerError) -> Self {
-        match err {
-            InstantiatePositionManagerError::NotFound(_) => ServiceError::NotFound(err.to_string()),
-            InstantiatePositionManagerError::FailedToInstantiate(_) => {
-                ServiceError::InternalError(err.to_string())
-            }
-            InstantiatePositionManagerError::ParamValidationFailed { source: _ } => {
-                ServiceError::BadRequest(err.to_string())
-            }
-            InstantiatePositionManagerError::UnknownStrategy(_) => {
-                ServiceError::NotFound(err.to_string())
             }
         }
     }

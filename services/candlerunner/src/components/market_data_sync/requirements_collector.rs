@@ -33,13 +33,13 @@ fn merge_ranges(mut input: Ranges) -> Ranges {
                 }
             }
 
-            return state;
+            state
         })
 }
 
 impl RequirementsCollector {
     pub fn push(&mut self, figi: Figi, time_from: DateTime<Utc>, time_to: Option<DateTime<Utc>>) {
-        let range = (time_from, time_to.unwrap_or_else(|| Utc::now()));
+        let range = (time_from, time_to.unwrap_or_else(Utc::now));
 
         let ranges = self.instruments.entry(figi).or_default();
         ranges.push(range);
@@ -52,7 +52,7 @@ impl RequirementsCollector {
             res.insert(figi, merge_ranges(raw_ranges));
         }
 
-        return res;
+        res
     }
 }
 

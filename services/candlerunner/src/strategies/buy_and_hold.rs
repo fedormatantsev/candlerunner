@@ -4,14 +4,14 @@ use std::sync::Arc;
 use chrono::prelude::*;
 
 use crate::models::instruments::Figi;
-use crate::models::market_data::Candle;
+use crate::models::market_data::CandlePack;
 use crate::models::params::{ParamDefinition, ParamError, ParamType, ParamValue};
 use crate::models::strategy::{
-    InstantiateStrategyError, Strategy, StrategyDefinition, StrategyExecutionContext,
-    StrategyExecutionError, StrategyFactory,
+    InstantiateStrategyError, Strategy, StrategyDefinition, StrategyExecutionError,
+    StrategyFactory, StrategyState,
 };
 
-const PARAM_NAME_INSTRUMENT: &str = "Instrument";
+const PARAM_NAME_INSTRUMENT: &str = "instrument";
 
 pub struct BuyAndHold {
     figi: Figi,
@@ -35,13 +35,11 @@ impl Strategy for BuyAndHold {
     fn execute(
         &self,
         _ts: DateTime<Utc>,
-        _candles: HashMap<Figi, Candle>,
-        _: Option<StrategyExecutionContext>,
-    ) -> Result<StrategyExecutionContext, StrategyExecutionError> {
-        Ok(StrategyExecutionContext::new(
-            vec![(self.figi.clone(), 1.0f64)],
-            bson::Document::default(),
-        ))
+        _candles: CandlePack,
+        mut state: StrategyState,
+    ) -> Result<StrategyState, StrategyExecutionError> {
+        state.set_signal(self.figi.to_owned(), 1.0f64);
+        Ok(state)
     }
 }
 
@@ -83,13 +81,10 @@ impl StrategyFactory for BuyAndHoldFactory {
             .get(PARAM_NAME_INSTRUMENT)
             .ok_or_else(|| ParamError::ParamMissing(PARAM_NAME_INSTRUMENT.to_string()))?;
 
-        let figi = match instrument_param {
-            ParamValue::Instrument(figi) => figi.clone(),
-            _ => {
-                return Err(ParamError::ParamTypeMismatch(PARAM_NAME_INSTRUMENT.to_string()).into())
-            }
-        };
+        let figi = instrument_param
+            .as_instrument()
+            .ok_or_else(|| ParamError::ParamTypeMismatch(PARAM_NAME_INSTRUMENT.to_owned()))?;
 
-        Ok(Arc::new(BuyAndHold::new(figi)))
+        Ok(Arc::new(BuyAndHold::new(figi.to_owned())))
     }
 }

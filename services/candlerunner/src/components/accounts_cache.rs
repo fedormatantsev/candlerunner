@@ -46,8 +46,8 @@ impl Periodic for AccountsCachePeriodic {
                     return Ok(Arc::new(res));
                 }
                 Err(err) => {
-                    println!("Failed to update `accounts-cache`: {}", err.to_string());
-                },
+                    println!("Failed to update `accounts-cache`: {}", err);
+                }
             };
 
             Ok(state)

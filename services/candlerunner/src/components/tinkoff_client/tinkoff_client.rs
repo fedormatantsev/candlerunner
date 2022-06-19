@@ -54,10 +54,10 @@ impl TinkoffClient {
         let sandbox_client = TinkoffSandboxClient::new(channel.clone(), sandbox_auth_token)?;
         let production_client = TinkoffProductionClient::new(channel, production_auth_token)?;
 
-        return Ok(Self {
+        Ok(Self {
             sandbox_client,
             production_client,
-        });
+        })
     }
 
     pub async fn get_instruments(&self) -> anyhow::Result<Vec<Instrument>> {
@@ -78,7 +78,7 @@ impl TinkoffClient {
         let sandbox_accounts = match sandbox_accounts {
             Ok(accts) => accts,
             Err(err) => {
-                println!("Failed to fetch sandbox accounts: {}", err.to_string());
+                println!("Failed to fetch sandbox accounts: {}", err);
                 vec![]
             }
         };
@@ -87,15 +87,15 @@ impl TinkoffClient {
         let production_accounts = match production_accounts {
             Ok(accts) => accts,
             Err(err) => {
-                println!("Failed to fetch production accounts: {}", err.to_string());
+                println!("Failed to fetch production accounts: {}", err);
                 vec![]
             }
         };
 
-        return Ok(sandbox_accounts
+        Ok(sandbox_accounts
             .into_iter()
             .chain(production_accounts.into_iter())
-            .collect());
+            .collect())
     }
 
     pub async fn open_sandbox_account(&self) -> anyhow::Result<()> {

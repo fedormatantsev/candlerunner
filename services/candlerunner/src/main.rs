@@ -1,9 +1,9 @@
 mod components;
 mod generated;
 mod models;
-mod position_managers;
 mod service;
 mod strategies;
+mod utils;
 
 use std::net::SocketAddr;
 
@@ -35,9 +35,6 @@ async fn main() -> anyhow::Result<()> {
         .register::<components::Mongo>()?
         .register::<components::ParamValidator>()?
         .register::<components::PositionsCache>()?
-        .register::<components::PositionManagerCache>()?
-        .register::<components::PositionManagerRegistry>()?
-        .register::<components::PositionManagerRunner>()?
         .register::<components::StrategyCache>()?
         .register::<components::StrategyRegistry>()?
         .register::<components::StrategyRunner>()?

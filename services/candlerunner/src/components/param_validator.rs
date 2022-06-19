@@ -18,11 +18,10 @@ impl ParamValidator {
     ) -> Result<(), ParamError> {
         let instruments = self.instrument_cache.state();
 
-        for (param_name, _) in params {
+        for param_name in params.keys() {
             if param_definitions
                 .iter()
-                .find(|expected_param| (*expected_param).name() == param_name)
-                .is_none()
+                .any(|expected_param| (*expected_param).name() == param_name)
             {
                 return Err(ParamError::InvalidParam(param_name.to_owned()));
             }

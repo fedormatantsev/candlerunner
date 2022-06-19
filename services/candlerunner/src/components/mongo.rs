@@ -16,15 +16,12 @@ use component_store::{init_err, prelude::*};
 use crate::models::instance_id::InstanceId;
 use crate::models::instruments::{Figi, Instrument};
 use crate::models::market_data::{Candle, CandleTimeline, DataAvailability};
-use crate::models::position_manager::{
-    PositionManagerExecutionState, PositionManagerInstanceDefinition,
-};
-use crate::models::strategy::{
-    StrategyExecutionContext, StrategyExecutionState, StrategyInstanceDefinition,
-};
+use crate::models::strategy::{StrategyExecution, StrategyInstanceDefinition, StrategyState};
 
-const CANDLE_DATA_COLLECTION_NAME: &str = "candle_data";
-const STRATEGY_EXECUTION_COLLECTION_NAME: &str = "strategy_execution";
+const CANDLE_DATA_COLLECTION_NAME: &str = "candleData";
+const CANDLE_DATA_AVAILABILITY_COLLECTION_NAME: &str = "candleDataAvailability";
+const STRATEGY_STATE_COLLECTION_NAME: &str = "strategyState";
+const STRATEGY_EXECUTION_COLLECTION_NAME: &str = "strategyExecution";
 
 pub struct Mongo {
     db: Database,
@@ -91,14 +88,14 @@ impl Mongo {
             .await?;
         }
 
-        if !collections.contains(&STRATEGY_EXECUTION_COLLECTION_NAME.to_string()) {
+        if !collections.contains(&STRATEGY_STATE_COLLECTION_NAME.to_string()) {
             db.create_collection(
-                STRATEGY_EXECUTION_COLLECTION_NAME,
+                STRATEGY_STATE_COLLECTION_NAME,
                 CreateCollectionOptions::builder()
                     .timeseries(
                         TimeseriesOptions::builder()
                             .time_field("ts".into())
-                            .meta_field(Some("strategy_id".to_string()))
+                            .meta_field(Some("strategyId".to_string()))
                             .granularity(Some(TimeseriesGranularity::Seconds))
                             .build(),
                     )
@@ -221,7 +218,7 @@ impl Mongo {
     }
 
     pub async fn write_candles(&self, figi: &Figi, candles: CandleTimeline) -> anyhow::Result<()> {
-        let collection = self.db.collection::<Document>("candle_data");
+        let collection = self.db.collection::<Document>(CANDLE_DATA_COLLECTION_NAME);
 
         for (ts, candle) in candles {
             let candle = to_document(&candle)?;
@@ -247,7 +244,7 @@ impl Mongo {
         time_from: DateTime<Utc>,
         time_to: DateTime<Utc>,
     ) -> anyhow::Result<CandleTimeline> {
-        let collection = self.db.collection::<Document>("candle_data");
+        let collection = self.db.collection::<Document>(CANDLE_DATA_COLLECTION_NAME);
 
         let raw_data: Vec<_> = collection
             .find(
@@ -256,7 +253,7 @@ impl Mongo {
                     "$and": [
                         {
                             "ts": {
-                                "$gt": time_from
+                                "$gte": time_from
                             },
                         },
                         {
@@ -294,7 +291,9 @@ impl Mongo {
         date: Date<Utc>,
         availability: DataAvailability,
     ) -> anyhow::Result<()> {
-        let collection = self.db.collection::<Document>("candle_data_availability");
+        let collection = self
+            .db
+            .collection::<Document>(CANDLE_DATA_AVAILABILITY_COLLECTION_NAME);
         let ts = mongodb::bson::DateTime::from_chrono(date.and_hms(0, 0, 0));
         let availability = to_bson(&availability)?;
 
@@ -313,7 +312,9 @@ impl Mongo {
         &self,
         figi: &Figi,
     ) -> anyhow::Result<BTreeMap<Date<Utc>, DataAvailability>> {
-        let collection = self.db.collection::<Document>("candle_data_availability");
+        let collection = self
+            .db
+            .collection::<Document>(CANDLE_DATA_AVAILABILITY_COLLECTION_NAME);
         let raw_data: Vec<_> = collection
             .find(doc! {"figi": &figi.0}, None)
             .await?
@@ -340,23 +341,23 @@ impl Mongo {
         Ok(res)
     }
 
-    pub async fn read_strategy_execution_contexts(
+    pub async fn read_strategy_state(
         &self,
         strategy_id: &uuid::Uuid,
         time_from: DateTime<Utc>,
         time_to: Option<DateTime<Utc>>,
-    ) -> anyhow::Result<BTreeMap<DateTime<Utc>, StrategyExecutionContext>> {
+    ) -> anyhow::Result<BTreeMap<DateTime<Utc>, StrategyState>> {
         let collection = self
             .db
-            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
+            .collection::<Document>(STRATEGY_STATE_COLLECTION_NAME);
 
         let filter = match time_to {
             Some(time_to) => doc! {
-                "strategy_id": strategy_id,
+                "strategyId": strategy_id,
                 "$and": [
                     {
                         "ts": {
-                            "$gt": time_from
+                            "$gte": time_from
                         }
                     },
                     {
@@ -368,48 +369,48 @@ impl Mongo {
                 ]
             },
             None => doc! {
-                "strategy_id": strategy_id,
+                "strategyId": strategy_id,
                 "ts": {
-                    "$gt": time_from
+                    "$gte": time_from
                 }
             },
         };
 
         let raw_data: Vec<_> = collection.find(filter, None).await?.try_collect().await?;
-        let mut contexts: BTreeMap<DateTime<Utc>, StrategyExecutionContext> = Default::default();
+        let mut states: BTreeMap<DateTime<Utc>, StrategyState> = Default::default();
 
         for doc in raw_data {
             let ts = get_datetime(&doc, "ts")?;
-            let ctx_doc = doc
-                .get("context")
+            let serialized = doc
+                .get("state")
                 .ok_or_else(|| anyhow::anyhow!("`context` field is missing from document"))?;
 
-            let ctx = from_bson::<StrategyExecutionContext>(ctx_doc.clone())?;
+            let state = from_bson::<StrategyState>(serialized.to_owned())?;
 
-            contexts.insert(ts, ctx);
+            states.insert(ts, state);
         }
 
-        Ok(contexts)
+        Ok(states)
     }
 
-    pub async fn write_strategy_execution_contexts(
+    pub async fn write_strategy_state(
         &self,
         strategy_id: &uuid::Uuid,
-        contexts: Vec<(DateTime<Utc>, StrategyExecutionContext)>,
+        states: Vec<(DateTime<Utc>, StrategyState)>,
     ) -> anyhow::Result<()> {
         let collection = self
             .db
-            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
+            .collection::<Document>(STRATEGY_STATE_COLLECTION_NAME);
 
-        for (ts, ctx) in contexts {
-            let doc = to_document(&ctx)?;
+        for (ts, state) in states {
+            let serialized = to_document(&state)?;
 
             collection
                 .insert_one(
                     doc! {
                         "ts": ts,
-                        "strategy_id": strategy_id,
-                        "context": doc
+                        "strategyId": strategy_id,
+                        "state": serialized
                     },
                     None,
                 )
@@ -419,87 +420,20 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn write_strategy_execution_state(
+    pub async fn write_strategy_execution(
         &self,
         strategy_id: &uuid::Uuid,
-        state: &StrategyExecutionState,
-    ) -> anyhow::Result<()> {
-        let collection = self.db.collection::<Document>("strategy_execution_state");
-        let state = to_document(state)?;
-
-        collection
-            .update_one(
-                doc! { "strategy_id": strategy_id },
-                doc! { "$set": { "state": state } },
-                UpdateOptions::builder().upsert(true).build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn read_strategy_execution_state(
-        &self,
-        strategy_id: &uuid::Uuid,
-    ) -> anyhow::Result<Option<StrategyExecutionState>> {
-        let collection = self.db.collection::<Document>("strategy_execution_state");
-
-        let doc = collection
-            .find_one(doc! {"strategy_id": strategy_id}, None)
-            .await?;
-
-        if let Some(doc) = doc {
-            let state_doc = doc
-                .get("state")
-                .ok_or_else(|| anyhow::anyhow!("Field `state` is missing"))?
-                .clone();
-
-            return Ok(Some(from_bson::<StrategyExecutionState>(state_doc)?));
-        };
-
-        Ok(None)
-    }
-
-    pub async fn write_position_manager_instance(
-        &self,
-        instance_def: &PositionManagerInstanceDefinition,
-    ) -> anyhow::Result<()> {
-        let collection = self.db.collection::<Document>("position_manager_instances");
-        let doc = to_document(instance_def)?;
-
-        collection
-            .update_one(
-                doc! {"_id": instance_def.id()},
-                doc! {"$set": doc},
-                UpdateOptions::builder().upsert(true).build(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    pub async fn read_position_manager_instances(
-        &self,
-    ) -> anyhow::Result<Vec<PositionManagerInstanceDefinition>> {
-        return self
-            .read_items::<PositionManagerInstanceDefinition>("position_manager_instances")
-            .await;
-    }
-
-    pub async fn write_position_manager_execution_state(
-        &self,
-        position_manager_id: &uuid::Uuid,
-        state: &PositionManagerExecutionState,
+        execution: &StrategyExecution,
     ) -> anyhow::Result<()> {
         let collection = self
             .db
-            .collection::<Document>("position_manager_execution_state");
-        let state = to_document(state)?;
+            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
+        let serialized = to_bson(execution)?;
 
         collection
             .update_one(
-                doc! { "position_manager_id": position_manager_id },
-                doc! { "$set": { "state": state } },
+                doc! { "strategyId": strategy_id },
+                doc! { "$set": { "execution": serialized } },
                 UpdateOptions::builder().upsert(true).build(),
             )
             .await?;
@@ -507,27 +441,28 @@ impl Mongo {
         Ok(())
     }
 
-    pub async fn read_position_manager_execution_state(
+    pub async fn read_strategy_execution(
         &self,
-        position_manager_id: &uuid::Uuid,
-    ) -> anyhow::Result<Option<PositionManagerExecutionState>> {
+        strategy_id: &uuid::Uuid,
+    ) -> anyhow::Result<Option<StrategyExecution>> {
         let collection = self
             .db
-            .collection::<Document>("position_manager_execution_state");
+            .collection::<Document>(STRATEGY_EXECUTION_COLLECTION_NAME);
 
-        let doc = collection
-            .find_one(doc! {"position_manager_id": position_manager_id}, None)
-            .await?;
-
-        if let Some(doc) = doc {
-            let state_doc = doc
-                .get("state")
-                .ok_or_else(|| anyhow::anyhow!("Field `state` is missing"))?
-                .clone();
-
-            return Ok(Some(from_bson::<PositionManagerExecutionState>(state_doc)?));
+        let doc = match collection
+            .find_one(doc! {"strategyId": strategy_id}, None)
+            .await?
+        {
+            Some(doc) => doc,
+            None => return Ok(None),
         };
 
-        Ok(None)
+        let serialized = doc.get("execution").ok_or_else(|| {
+            anyhow::anyhow!("Strategy execution document is missing `execution` field")
+        })?;
+
+        let execution = from_bson::<StrategyExecution>(serialized.to_owned())?;
+
+        Ok(Some(execution))
     }
 }

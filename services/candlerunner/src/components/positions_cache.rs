@@ -51,8 +51,7 @@ impl Periodic for PositionsCachePeriodic {
                     Err(err) => {
                         println!(
                             "Failed to retrieve positions for account {}: {}",
-                            &account.id.0,
-                            err.to_string()
+                            &account.id.0, err
                         );
                         state
                             .get(&account.id)
@@ -67,7 +66,7 @@ impl Periodic for PositionsCachePeriodic {
                 next_state.insert(account.id.clone(), positions);
             }
 
-            return Ok(Arc::new(next_state));
+            Ok(Arc::new(next_state))
         })
     }
 }

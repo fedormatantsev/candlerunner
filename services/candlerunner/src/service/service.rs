@@ -9,14 +9,9 @@ use warp::{
 
 use component_store::ComponentStore;
 
-use crate::{
-    components,
-    models::{
-        account::{AccountId, Environment},
-        position_manager::PositionManagerInstanceDefinition,
-        strategy::StrategyInstanceDefinition,
-    },
-};
+use crate::components;
+use crate::models::account::{AccountId, Environment};
+use crate::models::strategy::StrategyInstanceDefinition;
 
 use super::error::ServiceError;
 
@@ -57,24 +52,6 @@ fn list_strategies_view(
     Ok(list_strategies)
 }
 
-fn list_position_managers_view(
-    component_store: &ComponentStore,
-) -> anyhow::Result<warp::filters::BoxedFilter<(impl warp::Reply,)>> {
-    let position_manager_registry = component_store
-        .resolve::<components::PositionManagerRegistry>()
-        .ok_or_else(|| anyhow::anyhow!("Failed to resolve `PositionManagerRegistry`"))?;
-
-    let list_position_managers = warp::get()
-        .and(warp::path!("list-position-managers"))
-        .map(move || {
-            let definitions: Vec<_> = position_manager_registry.definitions().collect();
-            warp::reply::json(&definitions)
-        })
-        .boxed();
-
-    Ok(list_position_managers)
-}
-
 fn instantiate_strategy_view(
     component_store: &ComponentStore,
 ) -> anyhow::Result<warp::filters::BoxedFilter<(impl warp::Reply,)>> {
@@ -104,10 +81,7 @@ fn instantiate_strategy_view(
                     .map_err(ServiceError::from)?;
 
                 if let Err(err) = mongo.write_strategy_instance(&def).await {
-                    println!(
-                        "Failed to write strategy instance to mongo: {}",
-                        err.to_string()
-                    );
+                    println!("Failed to write strategy instance to mongo: {}", err);
                     return Err(ServiceError::InternalError(err.to_string()));
                 }
 
@@ -133,64 +107,6 @@ fn instantiate_strategy_view(
     Ok(instantiate_strategy)
 }
 
-fn instantiate_position_manager_view(
-    component_store: &ComponentStore,
-) -> anyhow::Result<warp::filters::BoxedFilter<(impl warp::Reply,)>> {
-    let position_manager_registry = component_store
-        .resolve::<components::PositionManagerRegistry>()
-        .ok_or_else(|| anyhow::anyhow!("Failed to resolve `PositionManagerRegistry`"))?;
-
-    let position_manager_cache = component_store
-        .resolve::<components::PositionManagerCache>()
-        .ok_or_else(|| anyhow::anyhow!("Failed to resolve `PositionManagerCache`"))?;
-
-    let mongo = component_store
-        .resolve::<components::Mongo>()
-        .ok_or_else(|| anyhow::anyhow!("Failed to resolve `Mongo`"))?;
-
-    let instantiate_position_manager = warp::post()
-        .and(warp::path!("instantiate-position-manager"))
-        .and(warp::body::json())
-        .then(move |def: PositionManagerInstanceDefinition| {
-            let position_manager_registry = position_manager_registry.clone();
-            let position_manager_cache = position_manager_cache.clone();
-            let mongo = mongo.clone();
-
-            let view = async move {
-                position_manager_registry
-                    .validate_instance_definition(&def)
-                    .map_err(ServiceError::from)?;
-
-                if let Err(err) = mongo.write_position_manager_instance(&def).await {
-                    println!(
-                        "Failed to write position manager instance to mongo: {}",
-                        err.to_string()
-                    );
-                    return Err(ServiceError::InternalError(err.to_string()));
-                }
-
-                position_manager_cache
-                    .force_update(Some(Duration::from_millis(500)))
-                    .await;
-
-                Ok(warp::reply::with_status(
-                    warp::reply::json(&serde_json::json!({})),
-                    StatusCode::OK,
-                ))
-            };
-
-            async move {
-                match view.await {
-                    Ok(reply) => reply,
-                    Err(err) => warp::reply::WithStatus::<warp::reply::Json>::from(err),
-                }
-            }
-        })
-        .boxed();
-
-    Ok(instantiate_position_manager)
-}
-
 fn list_strategy_instances_view(
     component_store: &ComponentStore,
 ) -> anyhow::Result<warp::filters::BoxedFilter<(impl warp::Reply,)>> {
@@ -205,7 +121,7 @@ fn list_strategy_instances_view(
 
             let payload: HashMap<_, _> = strategy_cache
                 .iter()
-                .map(|(instance_id, (def, _))| (instance_id.clone(), def.clone()))
+                .map(|(instance_id, (def, _))| (*instance_id, def.clone()))
                 .collect();
 
             warp::reply::json(&payload)
@@ -213,30 +129,6 @@ fn list_strategy_instances_view(
         .boxed();
 
     Ok(list_strategy_instances)
-}
-
-fn list_position_manager_instances_view(
-    component_store: &ComponentStore,
-) -> anyhow::Result<warp::filters::BoxedFilter<(impl warp::Reply,)>> {
-    let position_manager_cache = component_store
-        .resolve::<components::PositionManagerCache>()
-        .ok_or_else(|| anyhow::anyhow!("Failed to resolve `PositionManagerCache`"))?;
-
-    let list_position_manager_instances = warp::get()
-        .and(warp::path!("list-position-manager-instances"))
-        .map(move || {
-            let position_manager_cache = position_manager_cache.state();
-
-            let payload: HashMap<_, _> = position_manager_cache
-                .iter()
-                .map(|(instance_id, (def, _))| (instance_id.clone(), def.clone()))
-                .collect();
-
-            warp::reply::json(&payload)
-        })
-        .boxed();
-
-    Ok(list_position_manager_instances)
 }
 
 fn list_accounts_view(
@@ -423,15 +315,12 @@ pub async fn serve(addr: SocketAddr, component_store: &ComponentStore) -> anyhow
         .and(
             list_instruments_view(component_store)?
                 .or(list_strategies_view(component_store)?)
-                .or(list_position_managers_view(component_store)?)
                 .or(list_strategy_instances_view(component_store)?)
                 .or(instantiate_strategy_view(component_store)?)
                 .or(list_accounts_view(component_store)?)
                 .or(open_sandbox_account_view(component_store)?)
                 .or(close_sandbox_account_view(component_store)?)
-                .or(list_positions_view(component_store)?)
-                .or(instantiate_position_manager_view(component_store)?)
-                .or(list_position_manager_instances_view(component_store)?),
+                .or(list_positions_view(component_store)?),
         )
         .with(cors);
 

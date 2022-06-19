@@ -49,10 +49,10 @@ impl Periodic for MarketDataSyncPeriodic {
         })
     }
 
-    fn step<'periodic>(
-        &'periodic mut self,
+    fn step(
+        &mut self,
         state: Arc<Self::State>,
-    ) -> periodic_component::PeriodicFuture<'periodic, Self::State> {
+    ) -> periodic_component::PeriodicFuture<'_, Self::State> {
         Box::pin(async move {
             let strategies = self.strategy_cache.state();
             let mut collector = RequirementsCollector::default();
@@ -68,11 +68,7 @@ impl Periodic for MarketDataSyncPeriodic {
             for (figi, ranges) in data_ranges {
                 match self.sync_market_data_ranges(&figi, ranges).await {
                     Ok(_) => (),
-                    Err(err) => println!(
-                        "Failed to retrieve market data for {}: {}",
-                        figi.0,
-                        err.to_string()
-                    ),
+                    Err(err) => println!("Failed to retrieve market data for {}: {}", figi.0, err),
                 }
             }
 
@@ -85,33 +81,29 @@ impl MarketDataSyncPeriodic {
     async fn sync_candle_data(&self, figi: &Figi, cursor: DateTime<Utc>) -> anyhow::Result<()> {
         let candles = self
             .tinkoff_client
-            .get_candles(&figi, cursor, cursor.date().and_hms(23, 59, 59))
+            .get_candles(figi, cursor, cursor.date().and_hms(23, 59, 59))
             .await?;
 
         let today = Utc::now().date();
 
         let availability = if cursor.date() == today {
-            let new_cursor = candles
-                .iter()
-                .last()
-                .map(|(ts, _)| ts.clone())
-                .unwrap_or(cursor);
+            let available_up_to = candles.keys().last().cloned().unwrap_or(cursor);
 
-            DataAvailability::PartiallyAvailable { cursor: new_cursor }
+            DataAvailability::PartiallyAvailable { available_up_to }
         } else {
             DataAvailability::Available
         };
 
-        self.mongo.write_candles(&figi, candles).await?;
+        self.mongo.write_candles(figi, candles).await?;
         self.mongo
-            .write_candle_data_availability(&figi, cursor.date(), availability)
+            .write_candle_data_availability(figi, cursor.date(), availability)
             .await?;
 
         Ok(())
     }
 
     async fn sync_market_data_ranges(&self, figi: &Figi, ranges: Ranges) -> anyhow::Result<()> {
-        let availability = self.mongo.read_candle_data_availability(&figi).await?;
+        let availability = self.mongo.read_candle_data_availability(figi).await?;
 
         let cursors =
             ranges
@@ -129,7 +121,9 @@ impl MarketDataSyncPeriodic {
                         let cursor = match availability {
                             DataAvailability::Unavailable => Some(from.and_hms(0, 0, 0)),
                             DataAvailability::Available => None,
-                            DataAvailability::PartiallyAvailable { cursor } => Some(cursor.clone()),
+                            DataAvailability::PartiallyAvailable {
+                                available_up_to: cursor,
+                            } => Some(cursor),
                         };
 
                         if let Some(cursor) = cursor {
@@ -149,14 +143,14 @@ impl MarketDataSyncPeriodic {
                 break;
             }
 
-            let fetch_result = self.sync_candle_data(&figi, cursor).await;
+            let fetch_result = self.sync_candle_data(figi, cursor).await;
 
             if let Err(err) = fetch_result {
                 println!(
                     "Failed to fetch candles data for {} at {}: {}",
                     figi.0,
                     cursor.date(),
-                    err.to_string(),
+                    err,
                 );
                 continue;
             }

@@ -6,97 +6,87 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::models::account::AccountId;
+use crate::models::indicator::{ExtractIndicatorValue, Indicator};
 use crate::models::instance_id::InstanceId;
 use crate::models::instruments::Figi;
-use crate::models::market_data::{Candle, CandleResolution};
+use crate::models::market_data::{CandlePack, CandleResolution};
+use crate::models::namespaces;
 use crate::models::params::{ParamDefinition, ParamError, ParamValue};
 
+use crate::utils::id_generator::IdGenerator;
+
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaceOrderSettings {
+    account_id: AccountId,
+
+    buy_threshold: Option<f64>,
+    sell_threshold: Option<f64>,
+
+    /// Offset in ticks from order price to stop loss price
+    stop_loss_offset: u32,
+
+    /// Offset in ticks from order price to take profit price
+    take_profit_offset: u32,
+
+    /// Length of interval in candles
+    interval_length: u32,
+}
+
+impl InstanceId for PlaceOrderSettings {
+    fn id(&self) -> Uuid {
+        let mut generator = IdGenerator::default();
+        generator.add("accountId", self.account_id.0.as_bytes());
+        generator.add_opt(
+            "buyThreshold",
+            self.buy_threshold.map(|val| val.to_le_bytes()),
+        );
+        generator.add_opt(
+            "sellThreshold",
+            self.sell_threshold.map(|val| val.to_le_bytes()),
+        );
+
+        generator.add("stopLossOffset", self.stop_loss_offset.to_le_bytes());
+        generator.add("takeProfitOffset", self.take_profit_offset.to_le_bytes());
+        generator.add("interval_length", self.interval_length.to_le_bytes());
+
+        generator.generate(namespaces::get_place_order_settings_ns())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct StrategyInstanceDefinition {
     strategy_name: String,
     params: HashMap<String, ParamValue>,
     time_from: DateTime<Utc>,
     time_to: Option<DateTime<Utc>>,
     resolution: CandleResolution,
-}
-
-static mut STRATEGY_INSTANCE_NS: Option<Uuid> = None;
-
-fn get_strategy_instance_ns() -> &'static Uuid {
-    unsafe {
-        STRATEGY_INSTANCE_NS
-            .get_or_insert_with(|| Uuid::new_v5(&Uuid::NAMESPACE_OID, b"Strategy Instance Id"))
-    }
+    place_order_settings: Option<PlaceOrderSettings>,
 }
 
 impl InstanceId for StrategyInstanceDefinition {
     fn id(&self) -> Uuid {
-        let mut bytes: Vec<u8> = Default::default();
-        bytes.extend_from_slice(self.strategy_name.as_bytes());
-        bytes.push(0);
+        let mut generator = IdGenerator::default();
+        generator.add("strategyName", self.strategy_name.as_bytes());
+        generator.add("params", self.params().id().as_bytes());
+        generator.add("timeFrom", &self.time_from.timestamp().to_le_bytes());
+        generator.add_opt(
+            "timeTo",
+            self.time_to.map(|val| val.timestamp().to_le_bytes()),
+        );
+        
+        generator.add("resolution", self.resolution.to_string().as_bytes());
 
-        let mut sorted_params: Vec<(String, ParamValue)> = self
-            .params
-            .iter()
-            .map(|(param_name, param_value)| (param_name.clone(), param_value.clone()))
-            .collect();
+        generator.add_opt(
+            "placeOrderSettings",
+            self.place_order_settings
+                .as_ref()
+                .map(|val| val.id().as_bytes().to_owned()),
+        );
 
-        sorted_params.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-
-        for (param_name, param_value) in sorted_params {
-            bytes.extend_from_slice(param_name.as_bytes());
-            bytes.push(0);
-
-            match param_value {
-                ParamValue::Instrument(figi) => {
-                    bytes.extend_from_slice(b"Figi:");
-                    bytes.extend_from_slice(figi.0.as_bytes());
-                    bytes.push(0);
-                }
-
-                ParamValue::Integer(i) => {
-                    bytes.extend_from_slice(b"Integer:");
-                    bytes.extend_from_slice(&i.to_le_bytes());
-                    bytes.push(0);
-                }
-
-                ParamValue::Float(f) => {
-                    bytes.extend_from_slice(b"Float:");
-                    bytes.extend_from_slice(&f.to_le_bytes());
-                    bytes.push(0);
-                }
-
-                ParamValue::Boolean(b) => {
-                    bytes.extend_from_slice(b"Boolean:");
-                    let val = match b {
-                        true => 1u8,
-                        false => 0u8,
-                    };
-                    bytes.extend_from_slice(&[val, 0u8]);
-                }
-            }
-        }
-
-        bytes.extend_from_slice(b"Time from:");
-        bytes.extend_from_slice(&self.time_from.timestamp().to_le_bytes());
-        bytes.push(0);
-
-        bytes.extend_from_slice(b"Time to:");
-        match self.time_to {
-            Some(dt) => bytes.extend_from_slice(&dt.timestamp().to_le_bytes()),
-            None => bytes.extend_from_slice(b"NOW"),
-        }
-        bytes.push(0);
-
-        bytes.extend_from_slice(b"Resolution:");
-        match self.resolution {
-            CandleResolution::OneMinute => bytes.extend_from_slice(b"OneMinute"),
-            CandleResolution::OneHour => bytes.extend_from_slice(b"OneHour"),
-            CandleResolution::OneDay => bytes.extend_from_slice(b"OneDay"),
-        }
-        bytes.push(0);
-
-        Uuid::new_v5(get_strategy_instance_ns(), &bytes)
+        generator.generate(namespaces::get_strategy_instance_ns())
     }
 }
 
@@ -107,6 +97,7 @@ impl StrategyInstanceDefinition {
         time_from: DateTime<Utc>,
         time_to: Option<DateTime<Utc>>,
         resolution: CandleResolution,
+        place_order_settings: Option<PlaceOrderSettings>,
     ) -> Self {
         Self {
             strategy_name: strategy_name.to_string(),
@@ -114,6 +105,7 @@ impl StrategyInstanceDefinition {
             time_from,
             time_to,
             resolution,
+            place_order_settings,
         }
     }
 
@@ -135,6 +127,10 @@ impl StrategyInstanceDefinition {
 
     pub fn resolution(&self) -> CandleResolution {
         self.resolution
+    }
+
+    pub fn place_order_settings(&self) -> &Option<PlaceOrderSettings> {
+        &self.place_order_settings
     }
 }
 
@@ -177,7 +173,7 @@ pub enum StrategyExecutionError {
     ExecutionFailure,
 
     #[error("Failed to execute strategy")]
-    NonFixableFailure,
+    CriticalFailure,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Copy, Clone)]
@@ -187,40 +183,77 @@ pub enum StrategyExecutionStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub struct StrategyExecutionState {
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrategyExecution {
     status: StrategyExecutionStatus,
-    cursor: DateTime<Utc>,
+    last_execution_timestamp: DateTime<Utc>,
 }
 
-impl StrategyExecutionState {
-    pub fn new(status: StrategyExecutionStatus, cursor: DateTime<Utc>) -> Self {
-        Self { status, cursor }
+impl StrategyExecution {
+    pub fn new(status: StrategyExecutionStatus, last_execution_time: DateTime<Utc>) -> Self {
+        Self {
+            status,
+            last_execution_timestamp: last_execution_time,
+        }
     }
 
     pub fn status(&self) -> StrategyExecutionStatus {
         self.status
     }
 
-    pub fn cursor(&self) -> DateTime<Utc> {
-        self.cursor
+    pub fn last_execution_timestamp(&self) -> DateTime<Utc> {
+        self.last_execution_timestamp
+    }
+
+    pub fn set_status(&mut self, status: StrategyExecutionStatus) {
+        self.status = status;
+    }
+
+    pub fn set_last_execution_timestamp(&mut self, last_execution_timestamp: DateTime<Utc>) {
+        self.last_execution_timestamp = last_execution_timestamp;
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct StrategyExecutionContext {
-    signals: Vec<(Figi, f64)>,
-    meta: bson::Document,
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrategyState {
+    indicators: HashMap<uuid::Uuid, bson::Bson>,
+    signals: HashMap<Figi, f64>,
 }
 
-impl StrategyExecutionContext {
-    pub fn new(signals: Vec<(Figi, f64)>, meta: bson::Document) -> Self {
-        Self { signals, meta }
+impl StrategyState {
+    pub fn set_signal(&mut self, instrument: Figi, value: f64) {
+        self.signals.insert(instrument, value);
     }
 
-    /// Get the strategy execution context's output.
-    pub fn signals(&self) -> &[(Figi, f64)] {
-        &self.signals
+    pub fn update_indicator<I: Indicator>(
+        &mut self,
+        indicator: &I,
+        input: &I::Input,
+    ) -> Option<I::ValueType> {
+        let id = indicator.id();
+        let state = match self.indicators.get(&id) {
+            Some(serialized) => {
+                bson::from_bson::<I::State>(serialized.to_owned()).unwrap_or_else(|err| {
+                    println!("Failed to deserialize indicator state: {}", err);
+                    I::State::default()
+                })
+            }
+            None => I::State::default(),
+        };
+
+        let next_state = indicator.update(state, input);
+        let value = next_state.extract_value();
+
+        match bson::to_bson(&next_state) {
+            Ok(serialized) => {
+                self.indicators.insert(id, serialized);
+            }
+            Err(err) => println!("Failed to serialize indicator state: {}", err),
+        }
+
+        value
     }
 }
 
@@ -229,9 +262,9 @@ pub trait Strategy: Send + Sync + 'static {
     fn execute(
         &self,
         ts: DateTime<Utc>,
-        candles: HashMap<Figi, Candle>,
-        prev_context: Option<StrategyExecutionContext>,
-    ) -> Result<StrategyExecutionContext, StrategyExecutionError>;
+        candles_pack: CandlePack,
+        state: StrategyState,
+    ) -> Result<StrategyState, StrategyExecutionError>;
 }
 
 #[derive(Error, Debug)]

@@ -80,11 +80,11 @@ impl StrategyCachePeriodic {
                     match prev_state.get(&id) {
                         Some(item) => {
                             state.insert(id, item.clone());
-                            return state;
+                            state
                         }
                         None => {
                             instantiate(id, def, &mut state);
-                            return state;
+                            state
                         }
                     }
                 });

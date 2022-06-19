@@ -24,7 +24,7 @@ market-data-sync:
   update_period: 10
   max_chunks_per_instrument: 10
 
-strategy-runner:
+strategyRunner:
   update_period: 1
 
 accounts-cache:
@@ -35,11 +35,5 @@ positions-cache:
 
 param-validator: {}
 
-position-manager-registry: {}
-
-position-manager-cache:
+strategyStateReader:
   update_period: 1
-
-position-manager-runner:
-  update_period: 1
-  max_execution_context_age: 60
